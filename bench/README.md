@@ -44,6 +44,27 @@ zig build test
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
 
+## Benchmark Policy
+
+Benchmarks should measure the full cost of the public API path a user actually pays for.
+
+- if a library can serialize a typed value directly, benchmark that direct typed serialization path
+- if a library can parse bytes directly into a typed value, benchmark that direct typed parse path
+- if a library requires an intermediate representation such as a DOM, object tree, or generic value before the user can reach their typed data, that conversion cost belongs inside the timed region
+- likewise, if a library requires converting a typed value into an intermediate representation before writing, that conversion cost belongs inside the timed region
+- do not add extra benchmark-layer conversions that the compared library does not actually require
+
+In other words, benchmark end-to-end usage cost, not just the format engine in isolation.
+
+Current harness behavior follows that rule:
+
+- JSON compares `zerde.parseSliceAliased(..., Payload, ...)` against `std.json.parseFromSliceLeaky(StdPayload, ...)`, so both sides are timed on their typed parse APIs
+- JSON write compares `zerde.serialize(...)` against `std.json.Stringify.value(...)`, so both sides are timed on their typed serialization APIs
+- TOML parse compares `zerde.parseSlice(..., TomlParsePayload, ...)` against `zig_toml.Parser(TomlParsePayload).parseString(...)`
+- TOML write compares `zerde.serialize(...)` against `zig_toml.serialize(...)`
+
+If a future comparison target only offers an intermediate representation, the harness should include the required `IR -> typed` or `typed -> IR` step in the measured time.
+
 ## Recording Results
 
 Benchmark logs are append-only history files with newest runs first.
