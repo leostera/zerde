@@ -1,0 +1,7 @@
+service_name = "going merry"
+port = 5
+weights = [0.5, 1.25]
+
+[metadata]
+owner = "nami"
+retries = "three"

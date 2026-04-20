@@ -1,0 +1,5 @@
+name = "brook"
+active = true
+count = 9
+ratio = 0.75
+code = "BINK"

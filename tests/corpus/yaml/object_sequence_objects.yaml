@@ -1,0 +1,5 @@
+officers:
+  - name: nami
+    admin: true
+  - name: chopper
+    admin: false

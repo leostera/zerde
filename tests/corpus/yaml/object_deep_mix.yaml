@@ -1,0 +1,11 @@
+crew:
+  name: thousand sunny
+  roles: [ navigator, helmsman ]
+  active: true
+log:
+  - island: water seven
+    days: 4
+  - island: wano
+    days: 7
+notes: keep the log pose dry
+checkpoints: [ 3, 5, 8 ]

@@ -1,0 +1,9 @@
+service_name = "sunny"
+
+[[endpoints]]
+path = "/cola"
+secure = true
+
+[[endpoints]]
+path = "/gaon-cannon"
+secure = false

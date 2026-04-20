@@ -248,11 +248,14 @@ test "generic yaml entrypoint works" {
 }
 
 test {
+    _ = @import("cbor_tests");
     _ = @import("meta.zig");
     _ = @import("typed.zig");
     _ = @import("cbor.zig");
     _ = @import("json.zig");
     _ = @import("json_tests");
     _ = @import("toml.zig");
+    _ = @import("toml_tests");
     _ = @import("yaml.zig");
+    _ = @import("yaml_tests");
 }

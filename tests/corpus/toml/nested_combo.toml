@@ -1,0 +1,6 @@
+ship_name = "thousand sunny"
+checkpoints = [3, 5, 8]
+
+[crew]
+captain = "luffy"
+doctor = "chopper"
