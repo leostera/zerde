@@ -43,14 +43,14 @@ pub fn TomlSerializer(comptime Config: type) type {
             }
         }
 
-        pub fn emitInteger(self: *Self, value: i128) !void {
+        pub fn emitInteger(self: *Self, value: anytype) !void {
             try self.ensureValueContext();
-            try self.writer.print("{d}", .{value});
+            try self.writer.print("{}", .{value});
         }
 
-        pub fn emitFloat(self: *Self, value: f64) !void {
+        pub fn emitFloat(self: *Self, value: anytype) !void {
             try self.ensureValueContext();
-            try self.writer.print("{d}", .{value});
+            try self.writer.print("{}", .{value});
         }
 
         pub fn emitString(self: *Self, value: []const u8) !void {

@@ -68,12 +68,12 @@ pub fn JsonSerializer(comptime Config: type) type {
             }
         }
 
-        pub fn emitInteger(self: *Self, value: i128) !void {
-            try self.writer.print("{d}", .{value});
+        pub fn emitInteger(self: *Self, value: anytype) !void {
+            try self.writer.print("{}", .{value});
         }
 
-        pub fn emitFloat(self: *Self, value: f64) !void {
-            try self.writer.print("{d}", .{value});
+        pub fn emitFloat(self: *Self, value: anytype) !void {
+            try self.writer.print("{}", .{value});
         }
 
         pub fn emitString(self: *Self, value: []const u8) !void {
@@ -467,26 +467,7 @@ pub fn writeValue(writer: *std.Io.Writer, value: Value, comptime cfg: anytype) !
 }
 
 pub fn writeEscapedString(writer: *std.Io.Writer, bytes: []const u8) !void {
-    try writer.writeByte('"');
-    for (bytes) |c| {
-        switch (c) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            '\x08' => try writer.writeAll("\\b"),
-            '\x0c' => try writer.writeAll("\\f"),
-            else => {
-                if (c < 0x20) {
-                    try writer.print("\\u{X:0>4}", .{@as(u16, c)});
-                } else {
-                    try writer.writeByte(c);
-                }
-            },
-        }
-    }
-    try writer.writeByte('"');
+    try std.json.Stringify.encodeJsonString(bytes, .{}, writer);
 }
 
 fn effectiveMaxInputBytes(comptime cfg: anytype) usize {

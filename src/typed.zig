@@ -74,8 +74,8 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .bool => try serializer.emitBool(value),
-        .int, .comptime_int => try serializer.emitInteger(try intToI128(T, value)),
-        .float, .comptime_float => try serializer.emitFloat(asF64(T, value)),
+        .int, .comptime_int => try serializer.emitInteger(value),
+        .float, .comptime_float => try serializer.emitFloat(value),
         .optional => {
             if (value) |child| {
                 try serializeValue(serializer, child, cfg);
@@ -146,18 +146,6 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
         },
         else => @compileError("zerde cannot serialize " ++ @typeName(T)),
     }
-}
-
-fn intToI128(comptime T: type, value: T) Error!i128 {
-    return std.math.cast(i128, value) orelse error.IntegerOverflow;
-}
-
-fn asF64(comptime T: type, value: T) f64 {
-    return switch (@typeInfo(T)) {
-        .float => @as(f64, @floatCast(value)),
-        .comptime_float => value,
-        else => unreachable,
-    };
 }
 
 fn deserializeValue(comptime T: type, allocator: Allocator, deserializer: anytype, comptime cfg: anytype) anyerror!T {
