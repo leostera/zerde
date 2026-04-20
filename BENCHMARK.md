@@ -11,20 +11,51 @@ This file is a running log of JSON benchmark results for `zerde` against Zig's `
 
 ## Workload
 
-The benchmark uses a typed payload with:
+Current harness, starting at `8a3a0a9`, uses a mixed nested payload with:
 
-- a renamed top-level `serviceName` field
+- top-level scalars, enums, optionals, and fixed arrays
 - a nested `metadata` struct with a renamed `publicURL` field
-- a `metrics` array of structs
-- a `samples` array of integers
+- an `endpoints` array of structs with bools, enums, optionals, and fixed float arrays
+- a `metrics` array of structs with signed and unsigned integers, floats, optionals, and fixed string arrays
+- an `events` array of structs with enums, bools, signed and unsigned integers, floats, optionals, and fixed arrays
 
-Scenarios:
+Current scenarios:
 
-- `small`: `4` metrics, `32` samples, `16` bytes of extra string padding
-- `medium`: `2,048` metrics, `180,000` samples, `256` bytes of extra string padding
-- `large`: `16,384` metrics, `18,000,000` samples, `1,024` bytes of extra string padding
+- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` parse iterations, `1_000_000` write iterations
+- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations
+- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations
 
-The large case produces a JSON document of about `103.88 MiB`.
+The current large case produces a JSON document of about `107.58 MiB`.
+
+Runs before `8a3a0a9` used the older simpler payload, so they are not directly comparable to the newer mixed-payload runs.
+
+## 2026-04-20 - 8a3a0a9
+
+Changes since previous run:
+
+- replaced the benchmark payload with a more realistic nested document that exercises strings, bools, signed and unsigned integers, floats, optionals, enums, fixed arrays, slices, and nested structs
+- switched benchmark iteration counts to fixed values: `1_000_000` for small, `1_000` for medium, and `100` for large
+
+### Parse
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 5687.70 | 652.25 | 12836.01 | 289.01 | `zerde` 2.26x faster |
+| medium | 1,139,498 B | 1000 | 1737680.04 | 625.38 | 3804823.33 | 285.61 | `zerde` 2.19x faster |
+| large | 112,803,590 B | 100 | 173746168.75 | 619.17 | 380069327.50 | 283.05 | `zerde` 2.19x faster |
+
+### Write
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 4649.56 | 797.88 | 5479.65 | 677.01 | `zerde` 1.18x faster |
+| medium | 1,139,498 B | 1000 | 1264018.00 | 859.73 | 1514801.38 | 717.39 | `zerde` 1.20x faster |
+| large | 112,803,590 B | 100 | 124516359.16 | 863.97 | 149503560.42 | 719.57 | `zerde` 1.20x faster |
+
+### Notes
+
+- This is the first run using the richer mixed payload, so compare it against future entries with the same workload rather than the older simpler runs below.
+- The large workload is now truly mixed data rather than a tiny wrapper around one dominant numeric array.
 
 ## 2026-04-20 - 5187fab
 
