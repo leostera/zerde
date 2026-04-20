@@ -285,8 +285,8 @@ const StdPayload = struct {
 
 const toml_notes = [_][]const u8{
     "steady state",
-    "slow \"db\" branch",
-    "cache miss\nretry",
+    "slow database branch",
+    "cache miss retry",
     "regional failover active",
 };
 
@@ -304,7 +304,7 @@ fn TomlEndpointColumns(comptime endpoint_count: usize) type {
         paths: *const [endpoint_count][]const u8,
         methods: *const [endpoint_count]HttpMethod,
         timeout_ms: *const [endpoint_count]u32,
-        retries: *const [endpoint_count]u8,
+        retries: *const [endpoint_count]u16,
         weights: *const [endpoint_count][4]f32,
         enabled: *const [endpoint_count]bool,
     };
@@ -356,6 +356,55 @@ fn TomlPayload(comptime endpoint_count: usize, comptime metric_count: usize, com
     };
 }
 
+const TomlParseEndpointColumns = struct {
+    paths: []const []const u8,
+    methods: []const HttpMethod,
+    timeout_ms: []const u32,
+    retries: []const u16,
+    weights: []const [4]f32,
+    enabled: []const bool,
+};
+
+const TomlParseMetricColumns = struct {
+    names: []const []const u8,
+    kinds: []const MetricKind,
+    current: []const i64,
+    peak: []const u64,
+    ratio: []const f32,
+    notes: []const []const u8,
+    labels: []const [3][]const u8,
+};
+
+const TomlParseEventColumns = struct {
+    ids: []const u64,
+    codes: []const i32,
+    ok: []const bool,
+    severity: []const Severity,
+    routes: []const []const u8,
+    region: []const Region,
+    duration_micros: []const u32,
+    cpu_load: []const f32,
+    signatures: []const []const u8,
+    notes: []const []const u8,
+    flags: []const [4]bool,
+    samples: []const [4]u16,
+};
+
+const TomlParsePayload = struct {
+    service_name: []const u8,
+    version: u32,
+    healthy: bool,
+    build_number: i64,
+    primary_region: Region,
+    description: ?[]const u8,
+    signature: []const u8,
+    metadata: TomlMetadata,
+    endpoints: TomlParseEndpointColumns,
+    metrics: TomlParseMetricColumns,
+    events: TomlParseEventColumns,
+    sample_windows: [3]u32,
+};
+
 const BenchCase = struct {
     scenario: Scenario,
     zerde_value: Payload,
@@ -396,8 +445,11 @@ const ScenarioResult = struct {
 };
 
 const TomlScenarioResult = struct {
-    zerde_bytes: usize,
-    zig_toml_bytes: usize,
+    parse_bytes: usize,
+    zerde_write_bytes: usize,
+    zig_toml_write_bytes: usize,
+    parse_zerde: BenchStats,
+    parse_zig_toml: BenchStats,
     write_zerde: BenchStats,
     write_zig_toml: BenchStats,
 };
@@ -550,13 +602,14 @@ pub fn runTomlBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde TOML benchmark vs zig-toml\n", .{});
     std.debug.print("scenarios: small, medium, large\n", .{});
     std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
-    std.debug.print("note: benchmark currently covers writes only; TOML parse benchmarks are not wired in yet\n\n", .{});
+    std.debug.print("note: parse and write are both measured against the same canonical TOML input per scenario\n\n", .{});
 
     inline for (scenarios) |scenario| {
         const result = try runTomlScenario(
             scenario.endpoint_count,
             scenario.metric_count,
             scenario.event_count,
+            scenario.parse_iterations,
             scenario.write_iterations,
             io,
             allocator,
@@ -569,6 +622,7 @@ fn runTomlScenario(
     comptime endpoint_count: usize,
     comptime metric_count: usize,
     comptime event_count: usize,
+    parse_iterations: usize,
     write_iterations: usize,
     io: std.Io,
     allocator: Allocator,
@@ -579,14 +633,24 @@ fn runTomlScenario(
     var zerde_out: std.Io.Writer.Allocating = .init(allocator);
     defer zerde_out.deinit();
     try zerde.serialize(zerde.toml, &zerde_out.writer, value);
+    const parse_input = zerde_out.written();
 
     var zig_toml_out: std.Io.Writer.Allocating = .init(allocator);
     defer zig_toml_out.deinit();
     try zig_toml.serialize(allocator, value, &zig_toml_out.writer);
 
     return .{
-        .zerde_bytes = zerde_out.written().len,
-        .zig_toml_bytes = zig_toml_out.written().len,
+        .parse_bytes = parse_input.len,
+        .zerde_write_bytes = zerde_out.written().len,
+        .zig_toml_write_bytes = zig_toml_out.written().len,
+        .parse_zerde = .{
+            .iterations = parse_iterations,
+            .total_ns = try benchTomlZerdeParse(TomlParsePayload, io, parse_input, parse_iterations),
+        },
+        .parse_zig_toml = .{
+            .iterations = parse_iterations,
+            .total_ns = try benchZigTomlParse(TomlParsePayload, io, allocator, parse_input, parse_iterations),
+        },
         .write_zerde = .{
             .iterations = write_iterations,
             .total_ns = try benchTomlZerdeSerialize(io, value, write_iterations),
@@ -596,6 +660,32 @@ fn runTomlScenario(
             .total_ns = try benchZigTomlSerialize(io, allocator, value, write_iterations),
         },
     };
+}
+
+fn benchTomlZerdeParse(comptime T: type, io: std.Io, input: []const u8, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        const value = try zerde.parseSlice(zerde.toml, T, arena.allocator(), input);
+        consumeTomlParsed(value);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZigTomlParse(comptime T: type, io: std.Io, allocator: Allocator, input: []const u8, iterations: usize) !u64 {
+    var parser = zig_toml.Parser(T).init(allocator);
+    defer parser.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        var result = try parser.parseString(input);
+        consumeTomlParsed(result.value);
+        result.deinit();
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
 }
 
 fn benchTomlZerdeSerialize(io: std.Io, value: anytype, iterations: usize) !u64 {
@@ -624,27 +714,40 @@ fn benchZigTomlSerialize(io: std.Io, allocator: Allocator, value: anytype, itera
 
 fn printTomlScenarioResult(comptime scenario: Scenario, result: TomlScenarioResult) void {
     std.debug.print("{s}\n", .{scenario.name});
-    std.debug.print("  zerde bytes: {d} ({d:.2} MiB)\n", .{
-        result.zerde_bytes,
-        bytesToMiB(result.zerde_bytes),
+    std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
     });
-    std.debug.print("  zig-toml bytes: {d} ({d:.2} MiB)\n", .{
-        result.zig_toml_bytes,
-        bytesToMiB(result.zig_toml_bytes),
+    std.debug.print("  zerde write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_write_bytes,
+        bytesToMiB(result.zerde_write_bytes),
+    });
+    std.debug.print("  zig-toml write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zig_toml_write_bytes,
+        bytesToMiB(result.zig_toml_write_bytes),
     });
     std.debug.print("  endpoints / metrics / events: {d} / {d} / {d}\n", .{
         scenario.endpoint_count,
         scenario.metric_count,
         scenario.event_count,
     });
+    std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
     std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  parse    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zerde.nsPerOp(),
+        result.parse_zerde.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  parse zig-toml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zig_toml.nsPerOp(),
+        result.parse_zig_toml.mibPerSec(result.parse_bytes),
+    });
     std.debug.print("  write    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.write_zerde.nsPerOp(),
-        result.write_zerde.mibPerSec(result.zerde_bytes),
+        result.write_zerde.mibPerSec(result.zerde_write_bytes),
     });
     std.debug.print("  write zig-toml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.write_zig_toml.nsPerOp(),
-        result.write_zig_toml.mibPerSec(result.zig_toml_bytes),
+        result.write_zig_toml.mibPerSec(result.zig_toml_write_bytes),
     });
     std.debug.print("\n", .{});
 }
@@ -727,7 +830,7 @@ fn makePayload(allocator: Allocator, scenario: Scenario) !Payload {
         .healthy = true,
         .buildNumber = -42,
         .primaryRegion = .us_east_1,
-        .description = "critical path\nrelease candidate",
+        .description = "critical path release candidate",
         .signature = payload_signature,
         .metadata = .{
             .ownerId = 42,
@@ -818,7 +921,7 @@ fn makeStdPayload(allocator: Allocator, scenario: Scenario) !StdPayload {
         .healthy = true,
         .build_number = -42,
         .primary_region = .us_east_1,
-        .description = "critical path\nrelease candidate",
+        .description = "critical path release candidate",
         .signature = payload_signature,
         .metadata = .{
             .owner_id = 42,
@@ -851,7 +954,7 @@ fn makeTomlPayload(
     errdefer allocator.destroy(endpoint_methods);
     const endpoint_timeout_ms = try allocator.create([endpoint_count]u32);
     errdefer allocator.destroy(endpoint_timeout_ms);
-    const endpoint_retries = try allocator.create([endpoint_count]u8);
+    const endpoint_retries = try allocator.create([endpoint_count]u16);
     errdefer allocator.destroy(endpoint_retries);
     const endpoint_weights = try allocator.create([endpoint_count][4]f32);
     errdefer allocator.destroy(endpoint_weights);
@@ -907,7 +1010,7 @@ fn makeTomlPayload(
             else => .DELETE,
         };
         endpoint_timeout_ms[i] = @as(u32, @intCast(25 + ((i * 7) % 1500)));
-        endpoint_retries[i] = @as(u8, @intCast((i % 5) + 1));
+        endpoint_retries[i] = @as(u16, @intCast((i % 5) + 1));
         endpoint_weights[i] = weight_templates[i % weight_templates.len];
         endpoint_enabled[i] = (i % 5) != 0;
     }
@@ -1036,6 +1139,17 @@ fn freeTomlPayload(allocator: Allocator, value: anytype) void {
     allocator.destroy(value.endpoints.paths);
 
     allocator.destroy(value);
+}
+
+fn consumeTomlParsed(value: anytype) void {
+    std.mem.doNotOptimizeAway(value.version);
+    std.mem.doNotOptimizeAway(value.metadata.shard_count);
+    std.mem.doNotOptimizeAway(value.endpoints.paths.len);
+    std.mem.doNotOptimizeAway(value.metrics.names.len);
+    std.mem.doNotOptimizeAway(value.events.ids.len);
+    std.mem.doNotOptimizeAway(@intFromPtr(value.endpoints.paths.ptr));
+    std.mem.doNotOptimizeAway(@intFromPtr(value.metrics.names.ptr));
+    std.mem.doNotOptimizeAway(@intFromPtr(value.events.ids.ptr));
 }
 
 fn consumePayload(value: Payload) void {
