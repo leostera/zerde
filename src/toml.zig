@@ -1,9 +1,16 @@
+//! TOML backend for the typed walk.
+//!
+//! TOML cannot emit fields in arbitrary order if nested tables are involved, so
+//! this backend asks the typed layer for two struct passes: scalars first, then
+//! nested tables and arrays-of-tables.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
 
 pub const WriteConfig = struct {};
 
+/// Streaming TOML writer used by the typed layer.
 pub fn serializer(writer: *std.Io.Writer, comptime cfg: anytype) TomlSerializer(@TypeOf(cfg)) {
     return TomlSerializer(@TypeOf(cfg)).init(writer, cfg);
 }
@@ -71,6 +78,7 @@ pub fn TomlSerializer(comptime Config: type) type {
             return 2;
         }
 
+        // Pass 0 writes plain key/value fields, pass 1 writes nested tables.
         pub fn includeStructField(comptime Parent: type, comptime FieldType: type, comptime pass: usize) bool {
             _ = Parent;
             return switch (pass) {
@@ -85,12 +93,14 @@ pub fn TomlSerializer(comptime Config: type) type {
             self.current_field = name;
 
             if (isStructType(FieldType)) {
+                // Nested structs become TOML tables.
                 try self.writeTableHeader(name, false);
                 try self.pushTable(name);
                 return true;
             }
 
             if (isArrayOfStructs(FieldType)) {
+                // Arrays of structs are emitted one element at a time as array-of-table entries.
                 return true;
             }
 
@@ -132,6 +142,7 @@ pub fn TomlSerializer(comptime Config: type) type {
                 return;
             }
 
+            // Non-struct arrays stay inline in TOML.
             try self.ensureValueContext();
             try self.writer.writeByte('[');
             try self.pushInlineArray();
@@ -233,6 +244,7 @@ pub fn serialize(writer: *std.Io.Writer, value: anytype) !void {
     try serializeWith(writer, value, .{}, .{});
 }
 
+/// Convenience wrapper around the format-neutral typed serializer.
 pub fn serializeWith(
     writer: *std.Io.Writer,
     value: anytype,

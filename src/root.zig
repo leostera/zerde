@@ -1,22 +1,32 @@
+//! Public package entrypoints.
+//!
+//! `zerde` keeps the typed walk separate from the format backend:
+//! callers pick a Zig type plus a format module, and the typed layer
+//! specializes the read or write path for that exact combination.
+
 const std = @import("std");
 const json_impl = @import("json.zig");
 const toml_impl = @import("toml.zig");
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
-const value_mod = @import("value.zig");
 
 pub const FieldCase = meta.FieldCase;
 pub const SerdeConfig = meta.SerdeConfig;
-pub const Value = value_mod.Value;
-pub const ObjectField = value_mod.ObjectField;
 
 pub const json = json_impl;
 pub const toml = toml_impl;
 
+/// Recursively frees values produced by the owning parse paths.
+pub fn free(allocator: std.mem.Allocator, value: anytype) void {
+    typed.free(allocator, value);
+}
+
+/// Serializes `value` with the default serde and format configuration.
 pub fn serialize(comptime Format: type, writer: *std.Io.Writer, value: anytype) !void {
     try serializeWith(Format, writer, value, .{}, .{});
 }
 
+/// Serializes `value` with separate typed-layer and format-layer configuration.
 pub fn serializeWith(
     comptime Format: type,
     writer: *std.Io.Writer,
@@ -30,10 +40,12 @@ pub fn serializeWith(
     try typed.serialize(Format, writer, value, serde_cfg, format_cfg);
 }
 
+/// Deserializes `T` from a streaming reader using the format's typed backend.
 pub fn deserialize(comptime Format: type, comptime T: type, allocator: std.mem.Allocator, reader: *std.Io.Reader) !T {
     return deserializeWith(Format, T, allocator, reader, .{}, .{});
 }
 
+/// Deserializes `T` from a reader with separate typed-layer and format-layer configuration.
 pub fn deserializeWith(
     comptime Format: type,
     comptime T: type,
@@ -42,31 +54,28 @@ pub fn deserializeWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    if (@hasDecl(Format, "readerDeserializer")) {
-        var deserializer = try Format.readerDeserializer(allocator, reader, format_cfg);
-        defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
-        const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
-        if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
-        return value;
+    if (!@hasDecl(Format, "readerDeserializer")) {
+        @compileError("format " ++ @typeName(Format) ++ " does not implement readerDeserializer()");
     }
 
-    if (!@hasDecl(Format, "readValue")) {
-        @compileError("format " ++ @typeName(Format) ++ " does not implement readValue()");
-    }
-
-    var value = try Format.readValue(allocator, reader, format_cfg);
-    defer value.deinit(allocator);
-    return typed.fromValue(T, allocator, value, serde_cfg);
+    var deserializer = try Format.readerDeserializer(allocator, reader, format_cfg);
+    defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
+    const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
+    if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
+    return value;
 }
 
+/// Parses `T` from an in-memory slice using the owning slice path.
 pub fn parseSlice(comptime Format: type, comptime T: type, allocator: std.mem.Allocator, input: []const u8) !T {
     return parseSliceWith(Format, T, allocator, input, .{}, .{});
 }
 
-pub fn parseSliceLeaky(comptime Format: type, comptime T: type, allocator: std.mem.Allocator, input: []const u8) !T {
-    return parseSliceLeakyWith(Format, T, allocator, input, .{}, .{});
+/// Parses from a stable input slice and may alias unescaped strings directly into that slice.
+pub fn parseSliceAliased(comptime Format: type, comptime T: type, allocator: std.mem.Allocator, input: []const u8) !T {
+    return parseSliceAliasedWith(Format, T, allocator, input, .{}, .{});
 }
 
+/// Parses `T` from a slice with separate typed-layer and format-layer configuration.
 pub fn parseSliceWith(
     comptime Format: type,
     comptime T: type,
@@ -75,24 +84,19 @@ pub fn parseSliceWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    if (@hasDecl(Format, "sliceDeserializer")) {
-        var deserializer = try Format.sliceDeserializer(allocator, input, format_cfg);
-        defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
-        const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
-        if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
-        return value;
+    if (!@hasDecl(Format, "sliceDeserializer")) {
+        @compileError("format " ++ @typeName(Format) ++ " does not implement sliceDeserializer()");
     }
 
-    if (!@hasDecl(Format, "parseValue")) {
-        @compileError("format " ++ @typeName(Format) ++ " does not implement parseValue()");
-    }
-
-    var value = try Format.parseValue(allocator, input, format_cfg);
-    defer value.deinit(allocator);
-    return typed.fromValue(T, allocator, value, serde_cfg);
+    var deserializer = try Format.sliceDeserializer(allocator, input, format_cfg);
+    defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
+    const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
+    if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
+    return value;
 }
 
-pub fn parseSliceLeakyWith(
+/// Uses a format-specific aliased-slice fast path when the format provides one.
+pub fn parseSliceAliasedWith(
     comptime Format: type,
     comptime T: type,
     allocator: std.mem.Allocator,
@@ -100,8 +104,8 @@ pub fn parseSliceLeakyWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    if (@hasDecl(Format, "parseSliceLeakyWith")) {
-        return Format.parseSliceLeakyWith(T, allocator, input, serde_cfg, format_cfg);
+    if (@hasDecl(Format, "parseSliceAliasedWith")) {
+        return Format.parseSliceAliasedWith(T, allocator, input, serde_cfg, format_cfg);
     }
 
     return parseSliceWith(Format, T, allocator, input, serde_cfg, format_cfg);

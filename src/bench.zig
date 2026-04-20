@@ -1,3 +1,8 @@
+//! Benchmark harness for `zerde` versus Zig's `std.json`.
+//!
+//! The payload is intentionally mixed and nested so we measure the generic typed
+//! walk on realistic data rather than on one dominant scalar pattern.
+
 const std = @import("std");
 const zerde = @import("zerde");
 
@@ -37,6 +42,7 @@ const Scenario = struct {
     write_iterations: usize,
 };
 
+// Fixed iterations keep successive runs comparable even when implementation speed changes.
 const scenarios = [_]Scenario{
     .{
         .name = "small",
@@ -379,7 +385,9 @@ fn benchZerdeParse(io: std.Io, input: []const u8, iterations: usize) !u64 {
     const start = std.Io.Clock.Timestamp.now(io, .awake);
     for (0..iterations) |_| {
         _ = arena.reset(.retain_capacity);
-        const value = try zerde.parseSliceLeaky(zerde.json, Payload, arena.allocator(), input);
+        // The benchmark uses the aliased-slice path because it is the JSON fast path
+        // that corresponds to `std.json.parseFromSliceLeaky`.
+        const value = try zerde.parseSliceAliased(zerde.json, Payload, arena.allocator(), input);
         consumePayload(value);
     }
     return @intCast(start.untilNow(io).raw.nanoseconds);

@@ -1,7 +1,10 @@
+//! JSON backend for the typed walk.
+//!
+//! The typed layer decides what Zig type is being read or written. This file
+//! only implements JSON syntax, tokenization, and container state management.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Value = @import("value.zig").Value;
-const ObjectField = @import("value.zig").ObjectField;
 const typed = @import("typed.zig");
 const meta = @import("meta.zig");
 const Number = typed.Number;
@@ -9,6 +12,7 @@ const StringToken = typed.StringToken;
 const ValueKind = typed.ValueKind;
 
 pub const FieldCase = meta.FieldCase;
+/// Reader-side limits and aliasing policy.
 pub const ReadConfig = struct {
     max_input_bytes: usize = 16 * 1024 * 1024,
     borrow_strings: bool = false,
@@ -30,16 +34,19 @@ pub fn serializer(writer: *std.Io.Writer, comptime cfg: anytype) JsonSerializer(
     return JsonSerializer(@TypeOf(cfg)).init(writer, cfg);
 }
 
+/// Reader-backed deserializer. The reader payload is copied and owned by the backend.
 pub fn readerDeserializer(allocator: Allocator, reader: *std.Io.Reader, comptime cfg: anytype) !JsonDeserializer(@TypeOf(cfg)) {
     const input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
     return JsonDeserializer(@TypeOf(cfg)).initOwned(input, cfg);
 }
 
+/// Slice-backed deserializer. The raw bytes are borrowed from the caller.
 pub fn sliceDeserializer(allocator: Allocator, input: []const u8, comptime cfg: anytype) !JsonDeserializer(@TypeOf(cfg)) {
     _ = allocator;
     return JsonDeserializer(@TypeOf(cfg)).initBorrowed(input, cfg);
 }
 
+/// Streaming JSON writer used by the typed layer.
 pub fn JsonSerializer(comptime Config: type) type {
     return struct {
         writer: *std.Io.Writer,
@@ -176,6 +183,7 @@ pub fn JsonSerializer(comptime Config: type) type {
     };
 }
 
+/// Pull-based JSON reader used by the typed layer.
 pub fn JsonDeserializer(comptime Config: type) type {
     return struct {
         input: []const u8,
@@ -222,6 +230,7 @@ pub fn JsonDeserializer(comptime Config: type) type {
             return self.can_borrow_strings;
         }
 
+        // The typed layer uses this to branch for optionals, enums, and skipping.
         pub fn peekKind(self: *Self) !ValueKind {
             self.parser.skipWhitespace();
             return switch (self.parser.peek() orelse return error.UnexpectedEndOfInput) {
@@ -385,6 +394,7 @@ pub fn serialize(writer: *std.Io.Writer, value: anytype) !void {
     try serializeWith(writer, value, .{}, .{});
 }
 
+/// Convenience wrapper around the format-neutral typed serializer.
 pub fn serializeWith(
     writer: *std.Io.Writer,
     value: anytype,
@@ -398,6 +408,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, reader: *std.Io.Reade
     return deserializeWith(T, allocator, reader, .{}, .{});
 }
 
+/// Reader entrypoint that owns the input buffer and returns fully-owned strings.
 pub fn deserializeWith(
     comptime T: type,
     allocator: Allocator,
@@ -416,6 +427,7 @@ pub fn parseSlice(comptime T: type, allocator: Allocator, input: []const u8) Par
     return parseSliceWith(T, allocator, input, .{}, .{});
 }
 
+/// Slice entrypoint that still duplicates strings when the caller wants owned data.
 pub fn parseSliceWith(
     comptime T: type,
     allocator: Allocator,
@@ -429,11 +441,13 @@ pub fn parseSliceWith(
     return value;
 }
 
-pub fn parseSliceLeaky(comptime T: type, allocator: Allocator, input: []const u8) ParseError!T {
-    return parseSliceLeakyWith(T, allocator, input, .{}, .{});
+/// Parses from a stable input slice and may alias unescaped strings directly into that slice.
+pub fn parseSliceAliased(comptime T: type, allocator: Allocator, input: []const u8) ParseError!T {
+    return parseSliceAliasedWith(T, allocator, input, .{}, .{});
 }
 
-pub fn parseSliceLeakyWith(
+/// Slice entrypoint that asks the deserializer to reuse unescaped input bytes when possible.
+pub fn parseSliceAliasedWith(
     comptime T: type,
     allocator: Allocator,
     input: []const u8,
@@ -447,51 +461,6 @@ pub fn parseSliceLeakyWith(
     const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
     try deserializer.finish();
     return value;
-}
-
-pub fn readValue(allocator: Allocator, reader: *std.Io.Reader, comptime cfg: anytype) !Value {
-    const input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
-    defer allocator.free(input);
-    return parseValue(allocator, input, cfg);
-}
-
-pub fn parseValue(allocator: Allocator, input: []const u8, comptime cfg: anytype) Parser.Error!Value {
-    _ = cfg;
-    var parser = Parser{ .input = input };
-    return parser.parse(allocator);
-}
-
-pub fn writeValue(writer: *std.Io.Writer, value: Value, comptime cfg: anytype) !void {
-    _ = cfg;
-    switch (value) {
-        .null => try writer.writeAll("null"),
-        .bool => |b| if (b) {
-            try writer.writeAll("true");
-        } else {
-            try writer.writeAll("false");
-        },
-        .integer => |n| try writer.print("{d}", .{n}),
-        .float => |n| try writer.print("{d}", .{n}),
-        .string => |bytes| try writeEscapedString(writer, bytes),
-        .array => |items| {
-            try writer.writeByte('[');
-            for (items, 0..) |item, index| {
-                if (index != 0) try writer.writeByte(',');
-                try writeValue(writer, item, .{});
-            }
-            try writer.writeByte(']');
-        },
-        .object => |fields| {
-            try writer.writeByte('{');
-            for (fields, 0..) |field, index| {
-                if (index != 0) try writer.writeByte(',');
-                try writeEscapedString(writer, field.key);
-                try writer.writeByte(':');
-                try writeValue(writer, field.value, .{});
-            }
-            try writer.writeByte('}');
-        },
-    }
 }
 
 pub fn writeEscapedString(writer: *std.Io.Writer, bytes: []const u8) !void {
@@ -523,114 +492,7 @@ const Parser = struct {
         InvalidStringCharacter,
     };
 
-    fn parse(self: *Parser, allocator: Allocator) Error!Value {
-        const value = try self.parseValueInner(allocator);
-        self.skipWhitespace();
-        if (!self.eof()) return error.TrailingCharacters;
-        return value;
-    }
-
-    fn parseValueInner(self: *Parser, allocator: Allocator) Error!Value {
-        self.skipWhitespace();
-        const c = self.peek() orelse return error.UnexpectedEndOfInput;
-        return switch (c) {
-            'n' => blk: {
-                try self.consumeLiteral("null");
-                break :blk .null;
-            },
-            't' => blk: {
-                try self.consumeLiteral("true");
-                break :blk .{ .bool = true };
-            },
-            'f' => blk: {
-                try self.consumeLiteral("false");
-                break :blk .{ .bool = false };
-            },
-            '"' => .{ .string = try self.parseString(allocator) },
-            '[' => try self.parseArray(allocator),
-            '{' => try self.parseObject(allocator),
-            '-', '0'...'9' => blk: {
-                break :blk switch (try self.parseNumberToken()) {
-                    .integer => |n| .{ .integer = n },
-                    .float => |n| .{ .float = n },
-                };
-            },
-            else => error.UnexpectedToken,
-        };
-    }
-
-    fn parseArray(self: *Parser, allocator: Allocator) Error!Value {
-        _ = self.consume();
-        self.skipWhitespace();
-
-        var items: std.ArrayList(Value) = .empty;
-        errdefer {
-            for (items.items) |*item| item.deinit(allocator);
-            items.deinit(allocator);
-        }
-
-        if (self.peek() == ']') {
-            _ = self.consume();
-            return .{ .array = try items.toOwnedSlice(allocator) };
-        }
-
-        while (true) {
-            const value = try self.parseValueInner(allocator);
-            try items.append(allocator, value);
-            self.skipWhitespace();
-
-            const next = self.consume() orelse return error.UnexpectedEndOfInput;
-            switch (next) {
-                ',' => self.skipWhitespace(),
-                ']' => break,
-                else => return error.UnexpectedToken,
-            }
-        }
-
-        return .{ .array = try items.toOwnedSlice(allocator) };
-    }
-
-    fn parseObject(self: *Parser, allocator: Allocator) Error!Value {
-        _ = self.consume();
-        self.skipWhitespace();
-
-        var fields: std.ArrayList(ObjectField) = .empty;
-        errdefer {
-            for (fields.items) |*field| {
-                allocator.free(field.key);
-                field.value.deinit(allocator);
-            }
-            fields.deinit(allocator);
-        }
-
-        if (self.peek() == '}') {
-            _ = self.consume();
-            return .{ .object = try fields.toOwnedSlice(allocator) };
-        }
-
-        while (true) {
-            if (self.peek() != '"') return error.UnexpectedToken;
-            const key = try self.parseString(allocator);
-            errdefer allocator.free(key);
-
-            self.skipWhitespace();
-            if (self.consume() != ':') return error.UnexpectedToken;
-
-            const value = try self.parseValueInner(allocator);
-            try fields.append(allocator, .{ .key = key, .value = value });
-            self.skipWhitespace();
-
-            const next = self.consume() orelse return error.UnexpectedEndOfInput;
-            switch (next) {
-                ',' => self.skipWhitespace(),
-                '}' => break,
-                else => return error.UnexpectedToken,
-            }
-        }
-
-        return .{ .object = try fields.toOwnedSlice(allocator) };
-    }
-
+    // Shared token parser for both direct typed reads and recursive skipping.
     fn parseNumberToken(self: *Parser) Error!Number {
         const start = self.index;
         var is_float = false;
@@ -685,12 +547,7 @@ const Parser = struct {
         return .{ .integer = std.fmt.parseInt(i128, slice, 10) catch return error.InvalidNumber };
     }
 
-    fn parseString(self: *Parser, allocator: Allocator) Error![]u8 {
-        const token = try self.parseStringToken(allocator);
-        if (token.allocated) return @constCast(token.bytes);
-        return allocator.dupe(u8, token.bytes);
-    }
-
+    // Plain strings borrow from the input; escaped strings allocate rewritten bytes.
     fn parseStringToken(self: *Parser, allocator: Allocator) Error!StringToken {
         if (self.consume() != '"') return error.UnexpectedToken;
 
@@ -833,21 +690,6 @@ const Parser = struct {
     }
 };
 
-test "value parse and write roundtrip" {
-    const allocator = std.testing.allocator;
-    var value = try parseValue(allocator, "{\"name\":\"Ada\",\"numbers\":[1,2,3],\"ok\":true}", .{});
-    defer value.deinit(allocator);
-
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    defer out.deinit();
-    try writeValue(&out.writer, value, .{});
-
-    try std.testing.expectEqualStrings(
-        "{\"name\":\"Ada\",\"numbers\":[1,2,3],\"ok\":true}",
-        out.written(),
-    );
-}
-
 test "typed serialize supports rename_all and omit_null_fields" {
     const Example = struct {
         firstName: []const u8,
@@ -905,13 +747,13 @@ test "typed deserialize handles escaped strings on direct path" {
     try std.testing.expectEqual(@as(?[]const u8, null), decoded.nickname);
 }
 
-test "parseSliceLeaky borrows unescaped strings from input" {
+test "parseSliceAliased reuses unescaped strings from input" {
     const Example = struct {
         message: []const u8,
     };
 
     const input = "{\"message\":\"Ada\"}";
-    const decoded = try parseSliceLeaky(Example, std.testing.allocator, input);
+    const decoded = try parseSliceAliased(Example, std.testing.allocator, input);
 
     try std.testing.expectEqualStrings("Ada", decoded.message);
     try std.testing.expect(@intFromPtr(decoded.message.ptr) >= @intFromPtr(input.ptr));

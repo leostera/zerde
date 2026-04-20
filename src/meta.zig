@@ -1,5 +1,11 @@
+//! Compile-time serde metadata helpers.
+//!
+//! This module merges call-site config with optional `pub const serde = ...`
+//! declarations on user types and computes the final field naming policy.
+
 const std = @import("std");
 
+/// Global rename strategies understood by the typed layer.
 pub const FieldCase = enum {
     unchanged,
     snake_case,
@@ -8,6 +14,7 @@ pub const FieldCase = enum {
     kebab_case,
 };
 
+/// Cross-format serde policy. Individual formats can add their own config on top.
 pub const SerdeConfig = struct {
     rename_all: FieldCase = .unchanged,
     omit_null_fields: bool = false,
@@ -16,6 +23,7 @@ pub const SerdeConfig = struct {
 
 pub const JsonConfig = SerdeConfig;
 
+/// Returns whether a comptime-visible struct type exposes a field named `name`.
 pub fn hasField(comptime T: type, comptime name: []const u8) bool {
     return switch (@typeInfo(T)) {
         .@"struct" => |info| blk: {
@@ -50,24 +58,28 @@ fn fieldOverrideRenameFrom(comptime container: anytype, comptime field_name: []c
     return @field(field_cfg, "rename");
 }
 
+/// Per-type `rename_all` wins over call-site defaults.
 pub fn effectiveRenameAll(comptime T: type, comptime cfg: anytype) FieldCase {
     if (comptime serdeHasField(T, "rename_all")) return @field(T.serde, "rename_all");
     if (comptime cfgHasField(cfg, "rename_all")) return @field(cfg, "rename_all");
     return .unchanged;
 }
 
+/// Call-site omission policy wins so one call can suppress nulls without editing the type.
 pub fn effectiveOmitNullFields(comptime T: type, comptime cfg: anytype) bool {
     if (comptime cfgHasField(cfg, "omit_null_fields")) return @field(cfg, "omit_null_fields");
     if (comptime serdeHasField(T, "omit_null_fields")) return @field(T.serde, "omit_null_fields");
     return false;
 }
 
+/// Call-site unknown-field policy wins for the same reason as null omission.
 pub fn effectiveDenyUnknownFields(comptime T: type, comptime cfg: anytype) bool {
     if (comptime cfgHasField(cfg, "deny_unknown_fields")) return @field(cfg, "deny_unknown_fields");
     if (comptime serdeHasField(T, "deny_unknown_fields")) return @field(T.serde, "deny_unknown_fields");
     return false;
 }
 
+/// Field name precedence is: call-site field override, type field override, then rename_all.
 pub fn effectiveFieldName(comptime T: type, comptime field_name: []const u8, comptime cfg: anytype) []const u8 {
     if (comptime fieldOverrideHasRenameFrom(cfg, field_name)) {
         return fieldOverrideRenameFrom(cfg, field_name);
@@ -80,6 +92,7 @@ pub fn effectiveFieldName(comptime T: type, comptime field_name: []const u8, com
     return applyCase(field_name, effectiveRenameAll(T, cfg));
 }
 
+/// Converts a source field name to the requested wire-format case at comptime.
 pub fn applyCase(comptime name: []const u8, comptime style: FieldCase) []const u8 {
     if (style == .unchanged) return name;
 
@@ -97,6 +110,7 @@ pub fn applyCase(comptime name: []const u8, comptime style: FieldCase) []const u
                 continue;
             }
 
+            // Detect transitions like `firstName`, `HTTPServer`, or `field_name`.
             const boundary = isBoundary(name, i);
             if (boundary) {
                 switch (style) {

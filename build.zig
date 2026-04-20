@@ -4,11 +4,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // The package itself is just `src/root.zig`; tests and benchmarks import it.
     const zerde_mod = b.addModule("zerde", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
 
+    // `zig build test` exercises the library as a package module.
     const tests = b.addTest(.{
         .root_module = zerde_mod,
     });
@@ -17,6 +19,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run zerde tests");
     test_step.dependOn(&run_tests.step);
 
+    // Benchmarks live in a separate executable so they can use a different root file.
     const bench_exe = b.addExecutable(.{
         .name = "zerde-bench",
         .root_module = b.createModule(.{
