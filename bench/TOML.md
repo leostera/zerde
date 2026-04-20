@@ -37,6 +37,43 @@ The current large case produces a canonical parse input of about `68.89 MiB`, wi
 
 Runs before `8ba2955` used the older write-only harness, so the new parse numbers are not comparable to those entries.
 
+## 2026-04-20 - 102c8eb
+
+Changes since previous run:
+
+- preserved enum type information into the TOML backend so enum values no longer go through the generic string path
+- specialized quoted enum emission for both scalar fields and inline arrays
+- reduced per-element overhead again in the large columnar arrays dominated by enums and scalar values
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 1000000 | 8194.18 | 343.33 | 18507.01 | 152.01 | `zerde` 2.26x faster |
+| medium | 728,766 B | 1000 | 1937601.13 | 358.69 | 3453429.42 | 201.25 | `zerde` 1.78x faster |
+| large | 72,232,635 B | 100 | 190880997.91 | 360.89 | 340876375.83 | 202.09 | `zerde` 1.79x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 3326.43 | 845.75 | 6327.49 | 459.69 | `zerde` 1.90x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 793043.75 | 876.38 | 881136.00 | 808.55 | `zerde` 1.11x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 78872590.42 | 873.39 | 87011245.42 | 811.44 | `zerde` 1.10x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 11621.15 | 484.18 | 27073.73 | 214.87 | `zerde` 2.33x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 2674676.63 | 519.69 | 4380012.67 | 325.32 | `zerde` 1.64x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 267133226.25 | 515.75 | 426886360.83 | 330.79 | `zerde` 1.60x faster |
+
+### Notes
+
+- This run turns the TOML write lead from a near tie into a clearer win on medium and large payloads.
+- The biggest remaining throughput cost is now plain scalar formatting and raw string emission rather than dispatch overhead inside inline arrays.
+
 ## 2026-04-20 - 48da477
 
 Changes since previous run:
