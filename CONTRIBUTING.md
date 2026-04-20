@@ -46,10 +46,12 @@ The benchmark runner itself is built on `zBench`.
 
 Corpus-based roundtrip tests start in `tests/corpus/json`.
 Each fixture is treated as a canonical source file: parse it into a typed value, serialize it back out, and require an exact byte-for-byte match.
+The JSON corpus is feature-first, so fixture names should describe the wire shape being exercised rather than one shared app schema.
 
 When adding fixtures:
 
 - add the source file under `tests/corpus/<format>/`
+- prefer feature names like `null.json`, `array_float.json`, or `object_empty.json`
 - keep the file in `zerde`'s canonical output form for that format and config
 - use descriptive names so a failing generated test is easy to identify
 - run `zig build test` after adding or changing corpus fixtures

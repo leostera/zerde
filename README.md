@@ -217,6 +217,7 @@ The YAML backend writes a practical block-style subset and can parse that same s
 Corpus-driven roundtrip tests start with JSON in [`tests/corpus/json`](tests/corpus/json).
 `build.zig` scans that directory, generates one test per fixture, parses each file into a typed value, serializes it back out, and requires an exact byte-for-byte match.
 
+The JSON corpus is feature-first: files like `null.json`, `object_empty.json`, and `array_float.json` exercise JSON shapes directly, and the support module maps each fixture to the smallest matching Zig type.
 That exact match requirement is intentional: fixture files should already be in `zerde`'s canonical output form for the chosen serde and format config.
 When a roundtrip differs, the support code prints the first mismatching byte and a small context window before failing the test.
 
