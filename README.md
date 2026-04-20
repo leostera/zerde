@@ -25,7 +25,8 @@ The hot paths do not go through a runtime `Value` tree. For supported formats, `
   - aliased slice parse: supported through `parseSliceAliased`
 - TOML
   - serialize: supported
-  - deserialize: not implemented yet
+  - deserialize from reader: supported
+  - deserialize from slice: supported
 
 ## Design
 
@@ -137,47 +138,18 @@ try zerde.serialize(zerde.toml, writer, Config{
 
 The TOML backend uses two struct passes so simple key/value pairs are emitted before nested tables and arrays-of-tables.
 
+Owned TOML parse path:
+
+```zig
+const decoded = try zerde.parseSlice(zerde.toml, Config, allocator, input);
+defer zerde.free(allocator, decoded);
+```
+
 ## Benchmarks
 
+Benchmark workflow and commands live in [bench/README.md](bench/README.md).
 JSON benchmark history lives in [bench/JSON.md](bench/JSON.md).
 TOML benchmark history lives in [bench/TOML.md](bench/TOML.md).
-
-The JSON benchmark harness:
-
-- compares `zerde` against Zig's `std.json`
-- uses small, medium, and large scenarios
-- exercises a mixed nested payload instead of a synthetic single-type document
-- uses `parseSliceAliased` on the `zerde` side and `parseFromSliceLeaky` on the `std.json` side for a fair slice-parse comparison
-
-The TOML benchmark harness:
-
-- compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
-- is currently write-only; TOML parse benchmarks have not been added yet
-- uses a nested columnar payload so both serializers stay on a valid shared TOML shape
-
-Run everything with:
-
-```sh
-zig build bench -Doptimize=ReleaseFast
-```
-
-Run JSON only with:
-
-```sh
-zig build bench-json -Doptimize=ReleaseFast
-```
-
-Run TOML only with:
-
-```sh
-zig build bench-toml -Doptimize=ReleaseFast
-```
-
-Run tests with:
-
-```sh
-zig build test
-```
 
 ## Git Hooks
 

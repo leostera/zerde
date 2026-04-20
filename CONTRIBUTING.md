@@ -1,0 +1,56 @@
+# Contributing
+
+## Prerequisites
+
+- Zig `0.16.0`
+- Git
+
+## Initial Setup
+
+Clone the repository and enable the repo-local hooks path:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook runs `zig fmt` on staged `.zig` files and re-stages them before the commit is created.
+
+## Development Workflow
+
+Run the test suite:
+
+```sh
+zig build test
+```
+
+Run all benchmarks:
+
+```sh
+zig build bench -Doptimize=ReleaseFast
+```
+
+Run a single benchmark family:
+
+```sh
+zig build bench-json -Doptimize=ReleaseFast
+zig build bench-toml -Doptimize=ReleaseFast
+```
+
+Benchmark workflow and benchmark-log conventions live in [bench/README.md](bench/README.md).
+
+## Commit Style
+
+Use conventional commits.
+
+Examples:
+
+- `feat(toml): add typed TOML deserializer`
+- `fix(json): avoid widening integers in the writer`
+- `docs(bench): record JSON benchmark run`
+
+## Before Opening a Change
+
+- make sure `zig build test` passes
+- run the relevant benchmark if you changed benchmarked code
+- update the relevant docs when workflow or capabilities change
+- keep `AGENTS.md` current when repo conventions or contributor workflow change
