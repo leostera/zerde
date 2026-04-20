@@ -33,27 +33,6 @@ Current scenarios:
 
 The current large case produces TOML outputs of about `68.78 MiB` for `zerde` and `70.50 MiB` for `zig-toml`.
 
-## 2026-04-20 - cb395d7
-
-Changes since previous run:
-
-- moved the benchmark harness and benchmark history under `bench/`
-- split the benchmark entrypoints into `bench/json.zig` and `bench/toml.zig` while keeping the workload unchanged
-- updated the build so `zig build bench-toml` now runs directly from `bench/bench.zig`
-
-### Write
-
-| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| small | 2,939 B | 3,037 B | 1000000 | 4035.70 | 694.51 | 6429.88 | 450.45 | `zerde` 1.59x faster |
-| medium | 727,571 B | 745,857 B | 1000 | 925504.96 | 749.72 | 819265.38 | 868.22 | `zig-toml` 1.13x faster |
-| large | 72,119,881 B | 73,921,079 B | 100 | 91833403.33 | 748.95 | 80473134.59 | 876.03 | `zig-toml` 1.14x faster |
-
-### Notes
-
-- Results stayed within the same range as the previous run, which is what we want from a folder/layout change.
-- The medium and large cases are still limited by the same TOML serialization work as before; this move did not change the TOML backend itself.
-
 ## 2026-04-20 - cd59eb1
 
 Changes since previous run:
