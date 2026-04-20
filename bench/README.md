@@ -8,10 +8,12 @@ This directory contains the benchmark harness and benchmark history for `zerde`.
 - `bench/cbor.zig`: CBOR benchmark entrypoint
 - `bench/json.zig`: JSON benchmark entrypoint
 - `bench/toml.zig`: TOML benchmark entrypoint
+- `bench/yaml.zig`: YAML benchmark entrypoint
 - `bench/common.zig`: shared scenarios, payload builders, and benchmark loops
 - `bench/CBOR.md`: running CBOR benchmark history
 - `bench/JSON.md`: running JSON benchmark history
 - `bench/TOML.md`: running TOML benchmark history
+- `bench/YAML.md`: running YAML benchmark history
 
 ## Commands
 
@@ -39,6 +41,12 @@ Run CBOR only:
 zig build bench-cbor -Doptimize=ReleaseFast
 ```
 
+Run YAML only:
+
+```sh
+zig build bench-yaml -Doptimize=ReleaseFast
+```
+
 Run the test suite before recording benchmark results:
 
 ```sh
@@ -50,6 +58,7 @@ zig build test
 - JSON compares `zerde` against Zig's `std.json`
 - TOML compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
 - CBOR compares `zerde` against `zbor`
+- YAML compares `zerde` against `zig-yaml`
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
 The current harness measures parse, write, and roundtrip (`typed -> bytes -> typed`) cost.
@@ -77,6 +86,9 @@ Current harness behavior follows that rule:
 - CBOR parse compares `zerde.parseSliceAliased(..., Payload, ...)` against `zbor.DataItem.new(...) + zbor.parse(ZborPayload, ...)`
 - CBOR write compares `zerde.serialize(...)` against `zbor.stringify(...)`
 - CBOR roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `zbor.stringify(...) + zbor.DataItem.new(...) + zbor.parse(...)`
+- YAML parse compares `zerde.parseSliceAliased(..., YamlPayload, ...)` against `Yaml.load(...) + Yaml.parse(..., YamlPayload)`, so the baseline's document-load step stays inside the timed region
+- YAML write compares `zerde.serializeWith(..., .{ .omit_null_fields = true }, .{ .indent_width = 4 })` against `zig_yaml.stringify(...)`
+- YAML roundtrip compares `zerde.serializeWith(...) + zerde.parseSliceAliased(...)` against `zig_yaml.stringify(...) + Yaml.load(...) + Yaml.parse(...)`
 
 Roundtrip benchmarks also perform one deep equality check per scenario before timing begins.
 That keeps correctness in the harness without turning the timed region into a struct-comparison benchmark.

@@ -9,7 +9,8 @@
             .hash = "toml-0.3.0-bV14Be6EAQDr0fkyURz4jYFyTAMPcwlNN0FEPVjDnXTR",
         },
         .zbor = .{
-            .path = "3rdparty/zbor",
+            .url = "git+https://codeberg.org/r4gus/zbor#e96cd55a111bcbd76b1b51e4988a44ead1b0b48e",
+            .hash = "zbor-0.21.1-kr-CoPJ7AwCFwvJhlhfWF-E4qI7rnHF0MM0NwuZ1WOdU",
         },
     },
     .paths = .{
@@ -21,5 +22,6 @@
         "bench",
         "README.md",
         "src",
+        "vendor",
     },
 }

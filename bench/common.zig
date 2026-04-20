@@ -6,6 +6,7 @@
 const std = @import("std");
 const zerde = @import("zerde");
 const zig_toml = @import("zig_toml");
+const zig_yaml = @import("zig_yaml");
 const zbor = @import("zbor");
 
 const Allocator = std.mem.Allocator;
@@ -297,6 +298,37 @@ const toml_notes = [_][]const u8{
     "regional failover active",
 };
 
+const island_pool = [_][]const u8{
+    "foosha-village",
+    "orange-town",
+    "loguetown",
+    "alabasta",
+    "water-seven",
+    "sabaody",
+    "wano",
+    "egghead",
+    "elbaf",
+};
+
+const yaml_notes = [_]?[]const u8{
+    null,
+    "luffy-on-watch",
+    "zoro-took-wrong-turn",
+    "nami-updated-log-pose",
+    "sanji-restocked-galley",
+};
+
+const crew_tags = [_][]const u8{
+    "crew-straw-hat",
+    "ally-heart",
+    "ally-mink",
+    "sea-grand-line",
+    "sea-new-world",
+    "ship-sunny",
+    "mission-scout",
+    "mission-supply",
+};
+
 const TomlMetadata = struct {
     owner_id: u64,
     shard_count: u16,
@@ -412,6 +444,87 @@ const TomlParsePayload = struct {
     sample_windows: [3]u32,
 };
 
+const Sea = enum {
+    east_blue,
+    grand_line,
+    new_world,
+};
+
+const VoyageRole = enum {
+    scout,
+    supply,
+    escort,
+    rescue,
+};
+
+const Threat = enum {
+    calm,
+    storm,
+    emperor,
+};
+
+const LedgerKind = enum {
+    bounty,
+    cola,
+    supplies,
+};
+
+const YamlMetadata = struct {
+    captain_id: u64,
+    deck_count: u16,
+    flagship_name: []const u8,
+    eternal_pose: []const u8,
+    alliance_name: ?[]const u8,
+    coup_de_burst_ready: bool,
+};
+
+const YamlRoute = struct {
+    island_name: []const u8,
+    mission: VoyageRole,
+    eta_hours: u32,
+    reroutes: ?u8,
+    wind_bias: [4]f32,
+    secured: bool,
+};
+
+const YamlLedger = struct {
+    name: []const u8,
+    kind: LedgerKind,
+    current: i64,
+    peak: u64,
+    ratio: f32,
+    note: ?[]const u8,
+    tags: [3][]const u8,
+};
+
+const YamlLog = struct {
+    id: u64,
+    code: i32,
+    cleared: bool,
+    threat: Threat,
+    route: []const u8,
+    sea: Sea,
+    duration_minutes: u32,
+    wind_load: f32,
+    note: ?[]const u8,
+    flags: [4]bool,
+    samples: [4]u16,
+};
+
+const YamlPayload = struct {
+    ship_name: []const u8,
+    voyage_no: u32,
+    ready_for_new_world: bool,
+    bounty_delta: i64,
+    home_sea: Sea,
+    crew_note: ?[]const u8,
+    metadata: YamlMetadata,
+    routes: []const YamlRoute,
+    ledgers: []const YamlLedger,
+    logs: []const YamlLog,
+    checkpoint_hours: [3]u32,
+};
+
 const BenchCase = struct {
     scenario: Scenario,
     zerde_value: Payload,
@@ -486,10 +599,23 @@ const CborScenarioResult = struct {
     roundtrip_zbor: BenchStats,
 };
 
+const YamlScenarioResult = struct {
+    parse_bytes: usize,
+    zerde_write_bytes: usize,
+    zig_yaml_write_bytes: usize,
+    parse_zerde: BenchStats,
+    parse_zig_yaml: BenchStats,
+    write_zerde: BenchStats,
+    write_zig_yaml: BenchStats,
+    roundtrip_zerde: BenchStats,
+    roundtrip_zig_yaml: BenchStats,
+};
+
 pub fn runAll(io: std.Io, allocator: Allocator) !void {
     try runJsonBench(io, allocator);
     try runTomlBench(io, allocator);
     try runCborBench(io, allocator);
+    try runYamlBench(io, allocator);
 }
 
 pub fn runJsonBench(io: std.Io, allocator: Allocator) !void {
@@ -1150,6 +1276,236 @@ fn printCborScenarioResult(scenario: Scenario, result: CborScenarioResult) void 
     std.debug.print("\n", .{});
 }
 
+pub fn runYamlBench(io: std.Io, allocator: Allocator) !void {
+    std.debug.print("zerde YAML benchmark vs zig-yaml\n", .{});
+    std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
+    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("roundtrip: typed value -> bytes -> typed value, with one correctness check before timing\n", .{});
+    std.debug.print("note: parse is measured on one canonical YAML document per scenario; zig-yaml parse includes document load because it is part of the public typed path\n\n", .{});
+
+    for (scenarios) |scenario| {
+        const result = try runYamlScenario(io, allocator, scenario);
+        printYamlScenarioResult(scenario, result);
+    }
+
+    std.debug.print("\n", .{});
+}
+
+fn runYamlScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !YamlScenarioResult {
+    const value = try makeYamlPayload(allocator, scenario);
+    defer freeYamlPayload(allocator, value);
+
+    var zerde_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zerde_out.deinit();
+    try zerde.serializeWith(zerde.yaml, &zerde_out.writer, value, .{
+        .omit_null_fields = true,
+    }, .{
+        .indent_width = 4,
+    });
+
+    var zig_yaml_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zig_yaml_out.deinit();
+    try zig_yaml.stringify(allocator, value, &zig_yaml_out.writer);
+    const parse_input = zig_yaml_out.written();
+
+    return .{
+        .parse_bytes = parse_input.len,
+        .zerde_write_bytes = zerde_out.written().len,
+        .zig_yaml_write_bytes = zig_yaml_out.written().len,
+        .parse_zerde = .{
+            .iterations = scenario.parse_iterations,
+            .total_ns = try benchYamlZerdeParse(io, parse_input, scenario.parse_iterations),
+        },
+        .parse_zig_yaml = .{
+            .iterations = scenario.parse_iterations,
+            .total_ns = try benchZigYamlParse(io, parse_input, scenario.parse_iterations),
+        },
+        .write_zerde = .{
+            .iterations = scenario.write_iterations,
+            .total_ns = try benchYamlZerdeSerialize(io, value, scenario.write_iterations),
+        },
+        .write_zig_yaml = .{
+            .iterations = scenario.write_iterations,
+            .total_ns = try benchZigYamlSerialize(io, allocator, value, scenario.write_iterations),
+        },
+        .roundtrip_zerde = .{
+            .iterations = scenario.roundtrip_iterations,
+            .total_ns = try benchYamlZerdeRoundTrip(io, value, scenario.roundtrip_iterations),
+        },
+        .roundtrip_zig_yaml = .{
+            .iterations = scenario.roundtrip_iterations,
+            .total_ns = try benchZigYamlRoundTrip(io, allocator, value, scenario.roundtrip_iterations),
+        },
+    };
+}
+
+fn benchYamlZerdeParse(io: std.Io, input: []const u8, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        const value = try zerde.parseSliceAliased(zerde.yaml, YamlPayload, arena.allocator(), input);
+        consumeYamlPayload(value);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZigYamlParse(io: std.Io, input: []const u8, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        const loop_allocator = arena.allocator();
+        var yaml_doc: zig_yaml.Yaml = .{ .source = input };
+        try yaml_doc.load(loop_allocator);
+        const value = try yaml_doc.parse(loop_allocator, YamlPayload);
+        consumeYamlPayload(value);
+        yaml_doc.deinit(loop_allocator);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchYamlZerdeSerialize(io: std.Io, value: YamlPayload, iterations: usize) !u64 {
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zerde.serializeWith(zerde.yaml, &out.writer, value, .{
+            .omit_null_fields = true,
+        }, .{
+            .indent_width = 4,
+        });
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZigYamlSerialize(io: std.Io, allocator: Allocator, value: YamlPayload, iterations: usize) !u64 {
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zig_yaml.stringify(allocator, value, &out.writer);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchYamlZerdeRoundTrip(io: std.Io, value: YamlPayload, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try zerde.serializeWith(zerde.yaml, &out.writer, value, .{
+        .omit_null_fields = true,
+    }, .{
+        .indent_width = 4,
+    });
+    const check = try zerde.parseSliceAliased(zerde.yaml, YamlPayload, arena.allocator(), out.written());
+    try assertRoundTripEqual(YamlPayload, value, check);
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try zerde.serializeWith(zerde.yaml, &out.writer, value, .{
+            .omit_null_fields = true,
+        }, .{
+            .indent_width = 4,
+        });
+        const parsed = try zerde.parseSliceAliased(zerde.yaml, YamlPayload, arena.allocator(), out.written());
+        consumeYamlPayload(parsed);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZigYamlRoundTrip(io: std.Io, allocator: Allocator, value: YamlPayload, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try zig_yaml.stringify(allocator, value, &out.writer);
+    var check_doc: zig_yaml.Yaml = .{ .source = out.written() };
+    try check_doc.load(arena.allocator());
+    const check = try check_doc.parse(arena.allocator(), YamlPayload);
+    try assertRoundTripEqual(YamlPayload, value, check);
+    check_doc.deinit(arena.allocator());
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try zig_yaml.stringify(allocator, value, &out.writer);
+        var yaml_doc: zig_yaml.Yaml = .{ .source = out.written() };
+        try yaml_doc.load(arena.allocator());
+        const parsed = try yaml_doc.parse(arena.allocator(), YamlPayload);
+        consumeYamlPayload(parsed);
+        yaml_doc.deinit(arena.allocator());
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn printYamlScenarioResult(scenario: Scenario, result: YamlScenarioResult) void {
+    std.debug.print("{s}\n", .{scenario.name});
+    std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
+    });
+    std.debug.print("  zerde write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_write_bytes,
+        bytesToMiB(result.zerde_write_bytes),
+    });
+    std.debug.print("  zig-yaml write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zig_yaml_write_bytes,
+        bytesToMiB(result.zig_yaml_write_bytes),
+    });
+    std.debug.print("  routes / ledgers / logs: {d} / {d} / {d}\n", .{
+        scenario.endpoint_count,
+        scenario.metric_count,
+        scenario.event_count,
+    });
+    std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
+    std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  roundtrip iters: {d}\n", .{result.roundtrip_zerde.iterations});
+    std.debug.print("  parse    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zerde.nsPerOp(),
+        result.parse_zerde.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  parse zig-yaml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zig_yaml.nsPerOp(),
+        result.parse_zig_yaml.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  write    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zerde.nsPerOp(),
+        result.write_zerde.mibPerSec(result.zerde_write_bytes),
+    });
+    std.debug.print("  write zig-yaml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zig_yaml.nsPerOp(),
+        result.write_zig_yaml.mibPerSec(result.zig_yaml_write_bytes),
+    });
+    std.debug.print("  roundtrip    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zerde.nsPerOp(),
+        result.roundtrip_zerde.mibPerSec(result.zerde_write_bytes * 2),
+    });
+    std.debug.print("  roundtrip zig-yaml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zig_yaml.nsPerOp(),
+        result.roundtrip_zig_yaml.mibPerSec(result.zig_yaml_write_bytes * 2),
+    });
+    std.debug.print("\n", .{});
+}
+
 fn zborParseOptions(allocator: Allocator) zbor.Options {
     return .{
         .allocator = allocator,
@@ -1598,6 +1954,108 @@ fn makeTomlParseView(value: anytype) TomlParsePayload {
     };
 }
 
+fn makeYamlPayload(allocator: Allocator, scenario: Scenario) !YamlPayload {
+    const routes = try allocator.alloc(YamlRoute, scenario.endpoint_count);
+    errdefer allocator.free(routes);
+    for (routes, 0..) |*route, i| {
+        route.* = .{
+            .island_name = island_pool[i % island_pool.len],
+            .mission = switch (i % 4) {
+                0 => .scout,
+                1 => .supply,
+                2 => .escort,
+                else => .rescue,
+            },
+            .eta_hours = @as(u32, @intCast(6 + ((i * 11) % 240))),
+            .reroutes = if (i % 3 == 0) null else @as(u8, @intCast((i % 5) + 1)),
+            .wind_bias = weight_templates[i % weight_templates.len],
+            .secured = (i % 5) != 0,
+        };
+    }
+
+    const ledgers = try allocator.alloc(YamlLedger, scenario.metric_count);
+    errdefer allocator.free(ledgers);
+    for (ledgers, 0..) |*ledger, i| {
+        ledger.* = .{
+            .name = switch (i % 6) {
+                0 => "berry-cache",
+                1 => "cola-reserve",
+                2 => "meat-locker",
+                3 => "mini-merry-kit",
+                4 => "viva-card-box",
+                else => "snail-relay",
+            },
+            .kind = switch (i % 3) {
+                0 => .bounty,
+                1 => .cola,
+                else => .supplies,
+            },
+            .current = @as(i64, @intCast((i % 40_000))) - 20_000,
+            .peak = @as(u64, @intCast(100_000 + (i % 4_000_000))),
+            .ratio = @as(f32, @floatFromInt(i % 1000)) / 1000.0,
+            .note = yaml_notes[i % yaml_notes.len],
+            .tags = .{
+                crew_tags[i % crew_tags.len],
+                crew_tags[(i + 1) % crew_tags.len],
+                crew_tags[(i + 2) % crew_tags.len],
+            },
+        };
+    }
+
+    const logs = try allocator.alloc(YamlLog, scenario.event_count);
+    errdefer allocator.free(logs);
+    for (logs, 0..) |*log, i| {
+        log.* = .{
+            .id = 10_000 + i,
+            .code = @as(i32, @intCast((i % 5000))) - 2500,
+            .cleared = (i % 11) != 0,
+            .threat = switch (i % 3) {
+                0 => .calm,
+                1 => .storm,
+                else => .emperor,
+            },
+            .route = island_pool[(i + 2) % island_pool.len],
+            .sea = switch (i % 3) {
+                0 => .east_blue,
+                1 => .grand_line,
+                else => .new_world,
+            },
+            .duration_minutes = @as(u32, @intCast(12 + (i % 35_000))),
+            .wind_load = @as(f32, @floatFromInt(i % 1000)) / 1000.0,
+            .note = yaml_notes[(i + 1) % yaml_notes.len],
+            .flags = flag_templates[i % flag_templates.len],
+            .samples = sample_templates[i % sample_templates.len],
+        };
+    }
+
+    return .{
+        .ship_name = "thousand-sunny",
+        .voyage_no = 7,
+        .ready_for_new_world = true,
+        .bounty_delta = -42,
+        .home_sea = .new_world,
+        .crew_note = "gear-five-drill",
+        .metadata = .{
+            .captain_id = 56,
+            .deck_count = 4,
+            .flagship_name = "sunny",
+            .eternal_pose = "laugh-tale",
+            .alliance_name = "grand-fleet",
+            .coup_de_burst_ready = true,
+        },
+        .routes = routes,
+        .ledgers = ledgers,
+        .logs = logs,
+        .checkpoint_hours = .{ 12, 48, 96 },
+    };
+}
+
+fn freeYamlPayload(allocator: Allocator, value: YamlPayload) void {
+    allocator.free(value.routes);
+    allocator.free(value.ledgers);
+    allocator.free(value.logs);
+}
+
 fn assertRoundTripEqual(comptime T: type, expected: T, actual: T) !void {
     if (!deepEqual(T, expected, actual)) {
         std.debug.print("roundtrip mismatch for {s}\n", .{@typeName(T)});
@@ -1744,6 +2202,14 @@ fn consumeStdPayload(value: StdPayload) void {
     std.mem.doNotOptimizeAway(value.endpoints.len);
     std.mem.doNotOptimizeAway(value.metrics.len);
     std.mem.doNotOptimizeAway(value.events.len);
+}
+
+fn consumeYamlPayload(value: YamlPayload) void {
+    std.mem.doNotOptimizeAway(value.voyage_no);
+    std.mem.doNotOptimizeAway(value.metadata.deck_count);
+    std.mem.doNotOptimizeAway(value.routes.len);
+    std.mem.doNotOptimizeAway(value.ledgers.len);
+    std.mem.doNotOptimizeAway(value.logs.len);
 }
 
 fn freePayload(allocator: Allocator, value: Payload) void {

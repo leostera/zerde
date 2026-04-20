@@ -4,6 +4,7 @@ const std = @import("std");
 const cbor = @import("cbor.zig");
 const json = @import("json.zig");
 const toml = @import("toml.zig");
+const yaml = @import("yaml.zig");
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -23,8 +24,13 @@ pub fn main(init: std.process.Init) !void {
         try cbor.run(io, allocator);
         return;
     }
+    if (std.mem.eql(u8, mode, "yaml")) {
+        try yaml.run(io, allocator);
+        return;
+    }
 
     try json.run(io, allocator);
     try toml.run(io, allocator);
     try cbor.run(io, allocator);
+    try yaml.run(io, allocator);
 }

@@ -11,6 +11,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const zig_yaml_mod = b.createModule(.{
+        .root_source_file = b.path("vendor/zig-yaml/src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     // The package itself is just `src/root.zig`; tests and benchmarks import it.
     const zerde_mod = b.addModule("zerde", .{
@@ -38,6 +43,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zerde", .module = zerde_mod },
                 .{ .name = "zig_toml", .module = zig_toml_dep.module("toml") },
                 .{ .name = "zbor", .module = zbor_dep.module("zbor") },
+                .{ .name = "zig_yaml", .module = zig_yaml_mod },
             },
         }),
     });
@@ -55,7 +61,10 @@ pub fn build(b: *std.Build) void {
     const run_bench_cbor = b.addRunArtifact(bench_exe);
     run_bench_cbor.addArg("cbor");
 
-    const bench_step = b.step("bench", "Run JSON, TOML, and CBOR benchmarks");
+    const run_bench_yaml = b.addRunArtifact(bench_exe);
+    run_bench_yaml.addArg("yaml");
+
+    const bench_step = b.step("bench", "Run JSON, TOML, CBOR, and YAML benchmarks");
     bench_step.dependOn(&run_bench.step);
 
     const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
@@ -66,4 +75,7 @@ pub fn build(b: *std.Build) void {
 
     const bench_cbor_step = b.step("bench-cbor", "Run CBOR benchmark against zbor");
     bench_cbor_step.dependOn(&run_bench_cbor.step);
+
+    const bench_yaml_step = b.step("bench-yaml", "Run YAML benchmark against zig-yaml");
+    bench_yaml_step.dependOn(&run_bench_yaml.step);
 }
