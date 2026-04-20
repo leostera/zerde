@@ -54,26 +54,31 @@ pub fn TomlSerializer(comptime Config: type) type {
 
         pub fn emitBool(self: *Self, value: bool) !void {
             try self.ensureValueContext();
-            if (value) {
-                try self.writer.writeAll("true");
-            } else {
-                try self.writer.writeAll("false");
-            }
+            try writeBool(self.writer, value);
         }
 
         pub fn emitInteger(self: *Self, value: anytype) !void {
             try self.ensureValueContext();
-            try self.writer.print("{}", .{value});
+            try writeInteger(self.writer, value);
         }
 
         pub fn emitFloat(self: *Self, value: anytype) !void {
             try self.ensureValueContext();
-            try self.writer.print("{}", .{value});
+            try writeFloat(self.writer, value);
         }
 
         pub fn emitString(self: *Self, value: []const u8) !void {
             try self.ensureValueContext();
             try writeBasicString(self.writer, value);
+        }
+
+        pub fn serializeSequence(self: *Self, comptime Sequence: type, value: Sequence, comptime cfg: anytype) !bool {
+            _ = cfg;
+            if (!isInlineSequenceType(Sequence)) return false;
+
+            try self.ensureValueContext();
+            try self.writeInlineValue(Sequence, value);
+            return true;
         }
 
         pub fn beginStruct(self: *Self, comptime T: type) !void {
@@ -238,6 +243,98 @@ pub fn TomlSerializer(comptime Config: type) type {
             }
         }
 
+        fn writeInlineValue(self: *Self, comptime T: type, value: T) !void {
+            switch (@typeInfo(T)) {
+                .bool => try writeBool(self.writer, value),
+                .int, .comptime_int => try writeInteger(self.writer, value),
+                .float, .comptime_float => try writeFloat(self.writer, value),
+                .@"enum" => try writeBasicString(self.writer, @tagName(value)),
+                .optional => {
+                    if (value) |child| {
+                        try self.writeInlineValue(@TypeOf(child), child);
+                    } else {
+                        return error.TomlNullUnsupported;
+                    }
+                },
+                .array => |info| {
+                    if (info.child == u8) {
+                        try writeBasicString(self.writer, value[0..]);
+                        return;
+                    }
+                    try self.writeInlineSequenceContents(T, value);
+                },
+                .pointer => |info| switch (info.size) {
+                    .slice => {
+                        if (info.child == u8) {
+                            try writeBasicString(self.writer, value);
+                            return;
+                        }
+                        try self.writeInlineSequenceContents(T, value);
+                    },
+                    .one => try self.writeInlineValue(info.child, value.*),
+                    else => return error.UnsupportedType,
+                },
+                else => return error.UnsupportedType,
+            }
+        }
+
+        fn writeInlineSequenceContents(self: *Self, comptime T: type, value: T) !void {
+            const Child = sequenceChild(T);
+
+            try self.writer.writeByte('[');
+            var first = true;
+
+            switch (@typeInfo(Child)) {
+                .bool => for (value) |item| {
+                    try writeInlineSeparator(self.writer, &first);
+                    try writeBool(self.writer, item);
+                },
+                .int, .comptime_int => for (value) |item| {
+                    try writeInlineSeparator(self.writer, &first);
+                    try writeInteger(self.writer, item);
+                },
+                .float, .comptime_float => for (value) |item| {
+                    try writeInlineSeparator(self.writer, &first);
+                    try writeFloat(self.writer, item);
+                },
+                .@"enum" => for (value) |item| {
+                    try writeInlineSeparator(self.writer, &first);
+                    try writeBasicString(self.writer, @tagName(item));
+                },
+                .array => |info| {
+                    if (info.child == u8) {
+                        for (value) |item| {
+                            try writeInlineSeparator(self.writer, &first);
+                            try writeBasicString(self.writer, item[0..]);
+                        }
+                    } else {
+                        for (value) |item| {
+                            try writeInlineSeparator(self.writer, &first);
+                            try self.writeInlineValue(Child, item);
+                        }
+                    }
+                },
+                .pointer => |info| {
+                    if (info.size == .slice and info.child == u8) {
+                        for (value) |item| {
+                            try writeInlineSeparator(self.writer, &first);
+                            try writeBasicString(self.writer, item);
+                        }
+                    } else {
+                        for (value) |item| {
+                            try writeInlineSeparator(self.writer, &first);
+                            try self.writeInlineValue(Child, item);
+                        }
+                    }
+                },
+                else => for (value) |item| {
+                    try writeInlineSeparator(self.writer, &first);
+                    try self.writeInlineValue(Child, item);
+                },
+            }
+            try self.writer.writeByte(']');
+        }
+
         fn pushTable(self: *Self, field_name: []const u8) !void {
             if (self.table_path_len == self.table_path.len) return error.TomlNestingTooDeep;
             self.table_path[self.table_path_len] = field_name;
@@ -301,6 +398,29 @@ fn isArrayOfStructs(comptime T: type) bool {
     };
 }
 
+fn isInlineSequenceType(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.child != u8 and !isStructType(info.child) and !isArrayOfStructs(info.child),
+        .pointer => |info| switch (info.size) {
+            .slice => info.child != u8 and !isStructType(info.child) and !isArrayOfStructs(info.child),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn sequenceChild(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.child,
+        .pointer => |info| switch (info.size) {
+            .slice => info.child,
+            .one => sequenceChild(info.child),
+            else => @compileError("unsupported sequence type: " ++ @typeName(T)),
+        },
+        else => @compileError("unsupported sequence type: " ++ @typeName(T)),
+    };
+}
+
 fn isBareKey(key: []const u8) bool {
     if (key.len == 0) return false;
     for (key) |c| {
@@ -313,17 +433,92 @@ fn isBareKey(key: []const u8) bool {
 
 fn writeBasicString(writer: *std.Io.Writer, bytes: []const u8) !void {
     try writer.writeByte('"');
-    for (bytes) |c| {
-        switch (c) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            else => try writer.writeByte(c),
+    var cursor: usize = 0;
+    while (cursor <= bytes.len) {
+        const escape_index = std.mem.indexOfAnyPos(u8, bytes, cursor, &toml_escape_bytes) orelse bytes.len;
+        if (cursor != escape_index) {
+            try writer.writeAll(bytes[cursor..escape_index]);
         }
+        if (escape_index == bytes.len) break;
+        try writeEscapedTomlByte(writer, bytes[escape_index]);
+        cursor = escape_index + 1;
     }
     try writer.writeByte('"');
+}
+
+fn writeBool(writer: *std.Io.Writer, value: bool) !void {
+    if (value) {
+        try writer.writeAll("true");
+    } else {
+        try writer.writeAll("false");
+    }
+}
+
+fn writeInteger(writer: *std.Io.Writer, value: anytype) !void {
+    try writer.print("{d}", .{value});
+}
+
+fn writeFloat(writer: *std.Io.Writer, value: anytype) !void {
+    if (std.math.isNan(value)) {
+        try writer.writeAll("nan");
+        return;
+    }
+    if (std.math.isInf(value)) {
+        if (value < 0) {
+            try writer.writeAll("-inf");
+        } else {
+            try writer.writeAll("inf");
+        }
+        return;
+    }
+    try writer.print("{d}", .{value});
+}
+
+const toml_escape_bytes = [_]u8{
+    '"',  '\\',
+    '\n', '\r',
+    '\t', 0x08,
+    0x0c, 0x00,
+    0x01, 0x02,
+    0x03, 0x04,
+    0x05, 0x06,
+    0x07, 0x0b,
+    0x0e, 0x0f,
+    0x10, 0x11,
+    0x12, 0x13,
+    0x14, 0x15,
+    0x16, 0x17,
+    0x18, 0x19,
+    0x1a, 0x1b,
+    0x1c, 0x1d,
+    0x1e, 0x1f,
+};
+
+fn writeEscapedTomlByte(writer: *std.Io.Writer, byte: u8) !void {
+    switch (byte) {
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        0x08 => try writer.writeAll("\\b"),
+        0x0c => try writer.writeAll("\\f"),
+        0x00...0x07, 0x0b, 0x0e...0x1f => {
+            const hex = "0123456789abcdef";
+            try writer.writeAll("\\u00");
+            try writer.writeByte(hex[byte >> 4]);
+            try writer.writeByte(hex[byte & 0x0f]);
+        },
+        else => unreachable,
+    }
+}
+
+fn writeInlineSeparator(writer: *std.Io.Writer, first: *bool) !void {
+    if (!first.*) {
+        try writer.writeAll(", ");
+    } else {
+        first.* = false;
+    }
 }
 
 test "serialize nested struct to toml" {
@@ -364,6 +559,51 @@ test "serialize nested struct to toml" {
         \\[metadata]
         \\owner = "platform"
         \\retries = "three"
+        \\
+    , out.written());
+}
+
+test "serialize TOML string escapes control bytes" {
+    const Example = struct {
+        value: []const u8,
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+
+    try serialize(&out.writer, Example{
+        .value = "a\x08b\x0cc\x01",
+    });
+
+    try std.testing.expectEqualStrings(
+        \\value = "a\bb\fc\u0001"
+        \\
+    , out.written());
+}
+
+test "serialize nested inline arrays to toml" {
+    const Example = struct {
+        values: [2][3]u16,
+        labels: [2][2][]const u8,
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+
+    try serialize(&out.writer, Example{
+        .values = .{
+            .{ 1, 2, 3 },
+            .{ 4, 5, 6 },
+        },
+        .labels = .{
+            .{ "a", "b" },
+            .{ "c", "d" },
+        },
+    });
+
+    try std.testing.expectEqualStrings(
+        \\values = [[1, 2, 3], [4, 5, 6]]
+        \\labels = [["a", "b"], ["c", "d"]]
         \\
     , out.written());
 }

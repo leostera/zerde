@@ -82,6 +82,11 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
                 return;
             }
 
+            const SerializerType = @TypeOf(serializer.*);
+            if (@hasDecl(SerializerType, "serializeSequence")) {
+                if (try serializer.serializeSequence(T, value, cfg)) return;
+            }
+
             try serializer.beginArray(info.child, value.len);
             for (value, 0..) |item, index| {
                 try serializer.beginArrayItem(info.child, index);
@@ -95,6 +100,11 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
                 if (info.child == u8) {
                     try serializer.emitString(value);
                     return;
+                }
+
+                const SerializerType = @TypeOf(serializer.*);
+                if (@hasDecl(SerializerType, "serializeSequence")) {
+                    if (try serializer.serializeSequence(T, value, cfg)) return;
                 }
 
                 try serializer.beginArray(info.child, value.len);
@@ -207,7 +217,7 @@ fn deserializeArray(
     allocator: Allocator,
     deserializer: anytype,
     comptime cfg: anytype,
-    ) anyerror!T {
+) anyerror!T {
     if (info.child == u8) {
         // Fixed-size byte arrays map to strings, but the input must fit exactly.
         const token = try deserializer.readString(allocator);
