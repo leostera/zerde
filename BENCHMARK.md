@@ -29,6 +29,63 @@ The current large case produces a JSON document of about `107.58 MiB`.
 
 Runs before `8a3a0a9` used the older simpler payload, so they are not directly comparable to the newer mixed-payload runs.
 
+## 2026-04-20 - 8ae56d3
+
+Changes since previous run:
+
+- removed the old runtime `Value` fallback path, so the package now relies on typed format backends only
+- renamed the aliased JSON slice parse API to `parseSliceAliased`
+- added README and source-level documentation across the package
+
+### Parse
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 5498.19 | 674.73 | 12760.10 | 290.73 | `zerde` 2.32x faster |
+| medium | 1,139,498 B | 1000 | 1693899.29 | 641.54 | 3816176.96 | 284.76 | `zerde` 2.25x faster |
+| large | 112,803,590 B | 100 | 168851010.00 | 637.12 | 377039325.00 | 285.32 | `zerde` 2.23x faster |
+
+### Write
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 4676.09 | 793.35 | 5518.36 | 672.26 | `zerde` 1.18x faster |
+| medium | 1,139,498 B | 1000 | 1266087.50 | 858.32 | 1528167.92 | 711.12 | `zerde` 1.21x faster |
+| large | 112,803,590 B | 100 | 125885706.25 | 854.57 | 150331443.33 | 715.60 | `zerde` 1.19x faster |
+
+### Notes
+
+- Performance stayed within noise of the previous aliased-slice run, which is what we want from a cleanup and documentation pass.
+- This run was taken on a clean commit after removing the runtime tree fallback, not on a dirty working tree.
+
+## 2026-04-20 - 1804f43
+
+Changes since previous run:
+
+- added an explicit slice-parse path that can alias unescaped JSON strings directly from the input buffer when the caller keeps the input alive
+- switched the benchmark to compare `zerde`'s aliased parse path against `std.json.parseFromSliceLeaky`, so both parsers are allowed to reuse the input slice
+
+### Parse
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 5457.33 | 679.78 | 12809.68 | 289.61 | `zerde` 2.35x faster |
+| medium | 1,139,498 B | 1000 | 1686185.67 | 644.48 | 3800610.25 | 285.93 | `zerde` 2.25x faster |
+| large | 112,803,590 B | 100 | 168133617.50 | 639.84 | 376343222.09 | 285.85 | `zerde` 2.24x faster |
+
+### Write
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 4671.43 | 794.14 | 5510.73 | 673.19 | `zerde` 1.18x faster |
+| medium | 1,139,498 B | 1000 | 1262402.46 | 860.83 | 1521429.42 | 714.27 | `zerde` 1.21x faster |
+| large | 112,803,590 B | 100 | 125214744.17 | 859.15 | 150374654.17 | 715.40 | `zerde` 1.20x faster |
+
+### Notes
+
+- Parse improved by about `4.2%` on small, `3.1%` on medium, and `3.3%` on large compared with the previous mixed-payload run.
+- Write stayed in the same range as the previous run because this change only affects the typed JSON read path.
+
 ## 2026-04-20 - 8a3a0a9
 
 Changes since previous run:
