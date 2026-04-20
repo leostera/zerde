@@ -379,7 +379,7 @@ fn benchZerdeParse(io: std.Io, input: []const u8, iterations: usize) !u64 {
     const start = std.Io.Clock.Timestamp.now(io, .awake);
     for (0..iterations) |_| {
         _ = arena.reset(.retain_capacity);
-        const value = try zerde.parseSlice(zerde.json, Payload, arena.allocator(), input);
+        const value = try zerde.parseSliceLeaky(zerde.json, Payload, arena.allocator(), input);
         consumePayload(value);
     }
     return @intCast(start.untilNow(io).raw.nanoseconds);

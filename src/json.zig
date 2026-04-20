@@ -11,6 +11,7 @@ const ValueKind = typed.ValueKind;
 pub const FieldCase = meta.FieldCase;
 pub const ReadConfig = struct {
     max_input_bytes: usize = 16 * 1024 * 1024,
+    borrow_strings: bool = false,
 };
 pub const WriteConfig = struct {};
 pub const ParseError = anyerror;
@@ -181,6 +182,7 @@ pub fn JsonDeserializer(comptime Config: type) type {
         cfg: Config,
         parser: Parser,
         owns_input: bool,
+        can_borrow_strings: bool,
         stack: [128]Container = undefined,
         stack_len: usize = 0,
 
@@ -192,6 +194,7 @@ pub fn JsonDeserializer(comptime Config: type) type {
                 .cfg = cfg,
                 .parser = .{ .input = input },
                 .owns_input = false,
+                .can_borrow_strings = effectiveBorrowStrings(cfg),
             };
         }
 
@@ -201,6 +204,7 @@ pub fn JsonDeserializer(comptime Config: type) type {
                 .cfg = cfg,
                 .parser = .{ .input = input },
                 .owns_input = true,
+                .can_borrow_strings = false,
             };
         }
 
@@ -212,6 +216,10 @@ pub fn JsonDeserializer(comptime Config: type) type {
             _ = self.cfg;
             self.parser.skipWhitespace();
             if (!self.parser.eof()) return error.TrailingCharacters;
+        }
+
+        pub fn borrowStrings(self: *Self) bool {
+            return self.can_borrow_strings;
         }
 
         pub fn peekKind(self: *Self) !ValueKind {
@@ -421,6 +429,26 @@ pub fn parseSliceWith(
     return value;
 }
 
+pub fn parseSliceLeaky(comptime T: type, allocator: Allocator, input: []const u8) ParseError!T {
+    return parseSliceLeakyWith(T, allocator, input, .{}, .{});
+}
+
+pub fn parseSliceLeakyWith(
+    comptime T: type,
+    allocator: Allocator,
+    input: []const u8,
+    comptime serde_cfg: anytype,
+    comptime read_cfg: anytype,
+) ParseError!T {
+    var deserializer = try sliceDeserializer(allocator, input, .{
+        .max_input_bytes = effectiveMaxInputBytes(read_cfg),
+        .borrow_strings = true,
+    });
+    const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
+    try deserializer.finish();
+    return value;
+}
+
 pub fn readValue(allocator: Allocator, reader: *std.Io.Reader, comptime cfg: anytype) !Value {
     const input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
     defer allocator.free(input);
@@ -473,6 +501,11 @@ pub fn writeEscapedString(writer: *std.Io.Writer, bytes: []const u8) !void {
 fn effectiveMaxInputBytes(comptime cfg: anytype) usize {
     if (comptime meta.hasField(@TypeOf(cfg), "max_input_bytes")) return @field(cfg, "max_input_bytes");
     return 16 * 1024 * 1024;
+}
+
+fn effectiveBorrowStrings(comptime cfg: anytype) bool {
+    if (comptime meta.hasField(@TypeOf(cfg), "borrow_strings")) return @field(cfg, "borrow_strings");
+    return false;
 }
 
 const Parser = struct {
@@ -870,6 +903,19 @@ test "typed deserialize handles escaped strings on direct path" {
 
     try std.testing.expectEqualStrings("Ada\nLovelace", decoded.message);
     try std.testing.expectEqual(@as(?[]const u8, null), decoded.nickname);
+}
+
+test "parseSliceLeaky borrows unescaped strings from input" {
+    const Example = struct {
+        message: []const u8,
+    };
+
+    const input = "{\"message\":\"Ada\"}";
+    const decoded = try parseSliceLeaky(Example, std.testing.allocator, input);
+
+    try std.testing.expectEqualStrings("Ada", decoded.message);
+    try std.testing.expect(@intFromPtr(decoded.message.ptr) >= @intFromPtr(input.ptr));
+    try std.testing.expect(@intFromPtr(decoded.message.ptr) < @intFromPtr(input.ptr) + input.len);
 }
 
 test "typed deserialize detects duplicate and unknown fields on direct path" {

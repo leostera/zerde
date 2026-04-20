@@ -63,6 +63,10 @@ pub fn parseSlice(comptime Format: type, comptime T: type, allocator: std.mem.Al
     return parseSliceWith(Format, T, allocator, input, .{}, .{});
 }
 
+pub fn parseSliceLeaky(comptime Format: type, comptime T: type, allocator: std.mem.Allocator, input: []const u8) !T {
+    return parseSliceLeakyWith(Format, T, allocator, input, .{}, .{});
+}
+
 pub fn parseSliceWith(
     comptime Format: type,
     comptime T: type,
@@ -86,6 +90,21 @@ pub fn parseSliceWith(
     var value = try Format.parseValue(allocator, input, format_cfg);
     defer value.deinit(allocator);
     return typed.fromValue(T, allocator, value, serde_cfg);
+}
+
+pub fn parseSliceLeakyWith(
+    comptime Format: type,
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    if (@hasDecl(Format, "parseSliceLeakyWith")) {
+        return Format.parseSliceLeakyWith(T, allocator, input, serde_cfg, format_cfg);
+    }
+
+    return parseSliceWith(Format, T, allocator, input, serde_cfg, format_cfg);
 }
 
 test "generic json entrypoints work" {

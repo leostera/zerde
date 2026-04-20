@@ -350,6 +350,10 @@ fn deserializePointer(
         .slice => {
             if (info.child == u8) {
                 const token = try deserializer.readString(allocator);
+                const DeserializerType = @TypeOf(deserializer.*);
+                if (@hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings()) {
+                    return token.bytes;
+                }
                 defer token.deinit(allocator);
                 return allocator.dupe(info.child, token.bytes);
             }
