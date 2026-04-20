@@ -252,6 +252,7 @@ test {
     _ = @import("typed.zig");
     _ = @import("cbor.zig");
     _ = @import("json.zig");
+    _ = @import("json_tests");
     _ = @import("toml.zig");
     _ = @import("yaml.zig");
 }
