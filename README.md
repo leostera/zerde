@@ -178,3 +178,13 @@ Run tests with:
 ```sh
 zig build test
 ```
+
+## Git Hooks
+
+This repository ships a pre-commit hook in [`.githooks/pre-commit`](.githooks/pre-commit) that runs `zig fmt` on staged `.zig` files and re-stages them before the commit is created.
+
+Enable the repo-local hooks path in a checkout with:
+
+```sh
+git config core.hooksPath .githooks
+```

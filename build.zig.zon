@@ -10,6 +10,7 @@
         },
     },
     .paths = .{
+        ".githooks",
         "build.zig",
         "build.zig.zon",
         "bench",

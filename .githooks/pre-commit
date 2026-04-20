@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+mapfile -d '' -t zig_files < <(git diff --cached --name-only -z --diff-filter=ACMR -- '*.zig')
+
+if ((${#zig_files[@]} == 0)); then
+    exit 0
+fi
+
+zig fmt "${zig_files[@]}"
+git add -- "${zig_files[@]}"
