@@ -37,6 +37,44 @@ The current large case produces a canonical parse input of about `68.89 MiB`, wi
 
 Runs before `8ba2955` used the older write-only harness, so the new parse numbers are not comparable to those entries.
 
+## 2026-04-20 - 48da477
+
+Changes since previous run:
+
+- switched TOML basic-string emission to chunked escape scanning instead of byte-at-a-time writes
+- added a format-level inline sequence fast path so TOML can serialize scalar-heavy arrays without bouncing through the generic per-item typed callback path
+- specialized inline sequence emission for bools, integers, floats, enums, strings, and nested inline arrays
+- expanded TOML basic-string escaping to cover control bytes while keeping the streaming writer architecture
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 1000000 | 8515.16 | 330.39 | 20271.41 | 138.78 | `zerde` 2.38x faster |
+| medium | 728,766 B | 1000 | 1916525.88 | 362.64 | 3360138.42 | 206.84 | `zerde` 1.75x faster |
+| large | 72,232,635 B | 100 | 181566105.84 | 379.40 | 327786710.00 | 210.16 | `zerde` 1.81x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 3575.03 | 786.94 | 6712.09 | 433.35 | `zerde` 1.88x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 838778.58 | 828.59 | 844664.63 | 843.47 | `zerde` 0.7% faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 82111884.17 | 838.93 | 82259511.25 | 858.31 | `zerde` 0.2% faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 12277.72 | 458.28 | 27295.52 | 213.13 | `zerde` 2.22x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 2696033.00 | 515.58 | 4241899.21 | 335.91 | `zerde` 1.57x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 262820705.42 | 524.21 | 409655304.58 | 344.70 | `zerde` 1.56x faster |
+
+### Notes
+
+- This is the first recorded run where `zerde` wins TOML write on all three scenarios, though the medium and large wins are still narrow.
+- The main win came from faster string scanning and lower overhead in inline sequence emission, not from changing the benchmark shape or adding format-specific shortcuts for this workload.
+
 ## 2026-04-20 - b9b03f2
 
 Changes since previous run:
