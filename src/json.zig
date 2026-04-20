@@ -353,6 +353,10 @@ pub fn JsonDeserializer(comptime Config: type) type {
                 .null => try self.readNull(),
                 .bool => _ = try self.readBool(),
                 .number => _ = try self.readNumber(),
+                .bytes => {
+                    const token = try self.readString(allocator);
+                    token.deinit(allocator);
+                },
                 .string => {
                     const token = try self.readString(allocator);
                     token.deinit(allocator);

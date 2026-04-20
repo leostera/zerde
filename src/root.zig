@@ -5,6 +5,7 @@
 //! specializes the read or write path for that exact combination.
 
 const std = @import("std");
+const bson_impl = @import("bson.zig");
 const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
 const toml_impl = @import("toml.zig");
@@ -15,6 +16,7 @@ const typed = @import("typed.zig");
 pub const FieldCase = meta.FieldCase;
 pub const SerdeConfig = meta.SerdeConfig;
 
+pub const bson = bson_impl;
 pub const cbor = cbor_impl;
 pub const json = json_impl;
 pub const toml = toml_impl;
@@ -248,6 +250,7 @@ test "generic yaml entrypoint works" {
 }
 
 test {
+    _ = @import("bson.zig");
     _ = @import("cbor_tests");
     _ = @import("meta.zig");
     _ = @import("typed.zig");

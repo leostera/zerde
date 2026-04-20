@@ -25,6 +25,7 @@ pub const ValueKind = enum {
     bool,
     number,
     string,
+    bytes,
     array,
     object,
 };
@@ -54,6 +55,7 @@ pub fn free(allocator: Allocator, value: anytype) void {
 /// Entry point used by `root.zig` once a format module has been selected.
 pub fn serialize(comptime Format: type, writer: *std.Io.Writer, value: anytype, comptime serde_cfg: anytype, comptime format_cfg: anytype) !void {
     var serializer = Format.serializer(writer, format_cfg);
+    defer if (@hasDecl(@TypeOf(serializer), "deinit")) serializer.deinit();
     try serializeValue(&serializer, value, serde_cfg);
 }
 
@@ -64,6 +66,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, deserializer: anytype
 
 fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !void {
     const T = @TypeOf(value);
+    const SerializerType = @TypeOf(serializer.*);
     switch (@typeInfo(T)) {
         .bool => try serializer.emitBool(value),
         .int, .comptime_int => try serializer.emitInteger(value),
@@ -76,7 +79,6 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
             }
         },
         .@"enum" => {
-            const SerializerType = @TypeOf(serializer.*);
             if (@hasDecl(SerializerType, "emitEnum")) {
                 try serializer.emitEnum(T, value);
             } else {
@@ -85,11 +87,14 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
         },
         .array => |info| {
             if (info.child == u8) {
-                try serializer.emitString(value[0..]);
+                if (@hasDecl(SerializerType, "emitBytes")) {
+                    try serializer.emitBytes(value[0..]);
+                } else {
+                    try serializer.emitString(value[0..]);
+                }
                 return;
             }
 
-            const SerializerType = @TypeOf(serializer.*);
             if (@hasDecl(SerializerType, "serializeSequence")) {
                 if (try serializer.serializeSequence(T, value, cfg)) return;
             }
@@ -105,11 +110,14 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
         .pointer => |info| switch (info.size) {
             .slice => {
                 if (info.child == u8) {
-                    try serializer.emitString(value);
+                    if (@hasDecl(SerializerType, "emitBytes")) {
+                        try serializer.emitBytes(value);
+                    } else {
+                        try serializer.emitString(value);
+                    }
                     return;
                 }
 
-                const SerializerType = @TypeOf(serializer.*);
                 if (@hasDecl(SerializerType, "serializeSequence")) {
                     if (try serializer.serializeSequence(T, value, cfg)) return;
                 }
@@ -128,7 +136,6 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
         .@"struct" => |info| {
             if (info.is_tuple) @compileError("tuple structs are not supported: " ++ @typeName(T));
 
-            const SerializerType = @TypeOf(serializer.*);
             // TOML uses two passes so scalars appear before nested tables; JSON stays at one pass.
             const pass_count = comptime SerializerType.structPassCount(T);
             try serializer.beginStruct(T);
@@ -229,8 +236,8 @@ fn deserializeArray(
     comptime cfg: anytype,
 ) anyerror!T {
     if (info.child == u8) {
-        // Fixed-size byte arrays map to strings, but the input must fit exactly.
-        const token = try deserializer.readString(allocator);
+        // Byte arrays may come from either a format-native bytes token or a plain string token.
+        const token = try readByteToken(allocator, deserializer);
         defer token.deinit(allocator);
 
         if (token.bytes.len != info.len) return error.LengthMismatch;
@@ -263,9 +270,9 @@ fn deserializePointer(
     switch (info.size) {
         .slice => {
             if (info.child == u8) {
-                const token = try deserializer.readString(allocator);
+                const token = try readByteToken(allocator, deserializer);
                 const DeserializerType = @TypeOf(deserializer.*);
-                // Aliased slice parses can hand string fields straight back to the caller without copying.
+                // Aliased slice parses can hand byte and string fields straight back to the caller without copying.
                 if (@hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings()) {
                     return token.bytes;
                 }
@@ -295,6 +302,18 @@ fn deserializePointer(
         },
         else => return error.UnsupportedType,
     }
+}
+
+fn readByteToken(allocator: Allocator, deserializer: anytype) anyerror!StringToken {
+    const DeserializerType = @TypeOf(deserializer.*);
+    if (@hasDecl(DeserializerType, "readBytes")) {
+        return switch (try deserializer.peekKind()) {
+            .bytes => try deserializer.readBytes(allocator),
+            .string => try deserializer.readString(allocator),
+            else => error.UnexpectedType,
+        };
+    }
+    return try deserializer.readString(allocator);
 }
 
 fn deserializeStruct(
