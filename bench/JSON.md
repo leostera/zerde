@@ -7,7 +7,7 @@ This file is a running log of JSON benchmark results for `zerde` against Zig's `
 - Machine: `Apple M1 Ultra`
 - OS: `Darwin 25.3.0 arm64`
 - Zig: `0.16.0`
-- Command: `zig build bench -Doptimize=ReleaseFast`
+- Command: `zig build bench-json -Doptimize=ReleaseFast`
 
 ## Workload
 
@@ -28,6 +28,35 @@ Current scenarios:
 The current large case produces a JSON document of about `107.58 MiB`.
 
 Runs before `8a3a0a9` used the older simpler payload, so they are not directly comparable to the newer mixed-payload runs.
+
+## 2026-04-20 - cb395d7
+
+Changes since previous run:
+
+- moved the benchmark harness and benchmark history under `bench/`
+- split the benchmark entrypoints into `bench/json.zig` and `bench/toml.zig` while keeping the workload unchanged
+- updated the build so `zig build bench-json` now runs directly from `bench/bench.zig`
+
+### Parse
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 5516.46 | 672.49 | 13113.51 | 282.90 | `zerde` 2.38x faster |
+| medium | 1,139,498 B | 1000 | 1679773.00 | 646.94 | 3830180.71 | 283.72 | `zerde` 2.28x faster |
+| large | 112,803,590 B | 100 | 166716485.83 | 645.27 | 377766857.09 | 284.77 | `zerde` 2.27x faster |
+
+### Write
+
+| Scenario | JSON Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,890 B | 1000000 | 4765.69 | 778.44 | 5604.54 | 661.93 | `zerde` 1.18x faster |
+| medium | 1,139,498 B | 1000 | 1262894.42 | 860.49 | 1532425.00 | 709.14 | `zerde` 1.21x faster |
+| large | 112,803,590 B | 100 | 124352920.84 | 865.10 | 150639000.83 | 714.14 | `zerde` 1.21x faster |
+
+### Notes
+
+- Results stayed within the same range as the previous run, which is what we want from a folder/layout change.
+- This run was taken after moving the harness to `bench/`, not after changing the JSON serializer or parser itself.
 
 ## 2026-04-20 - 8ae56d3
 
