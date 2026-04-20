@@ -9,5 +9,7 @@ Project conventions for automated changes:
 - benchmark history lives in `bench/JSON.md`, `bench/TOML.md`, `bench/CBOR.md`, and `bench/YAML.md`
 - benchmark timing is implemented with `zBench`; keep the scenario workloads and fairness policy stable unless you are intentionally changing benchmark behavior
 - add benchmark log entries only for real benchmark-affecting changes, newest first, with sections named `## YYYY-MM-DD - <hash>`
+- corpus roundtrip fixtures live in `tests/corpus/<format>` and should stay in canonical output form
+- JSON corpus tests are generated from `tests/corpus/json` and wired through `tests/json_tests.zig`
 - keep `README.md`, `bench/README.md`, and `CONTRIBUTING.md` aligned with the current workflow
 - keep this file updated when repo conventions change
