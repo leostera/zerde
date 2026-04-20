@@ -7,8 +7,17 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
+const read_impl = @import("toml_read.zig");
 
+pub const ReadConfig = read_impl.ReadConfig;
 pub const WriteConfig = struct {};
+
+pub const readerDeserializer = read_impl.readerDeserializer;
+pub const sliceDeserializer = read_impl.sliceDeserializer;
+pub const deserialize = read_impl.deserialize;
+pub const deserializeWith = read_impl.deserializeWith;
+pub const parseSlice = read_impl.parseSlice;
+pub const parseSliceWith = read_impl.parseSliceWith;
 
 /// Streaming TOML writer used by the typed layer.
 pub fn serializer(writer: *std.Io.Writer, comptime cfg: anytype) TomlSerializer(@TypeOf(cfg)) {

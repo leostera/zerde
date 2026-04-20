@@ -147,12 +147,21 @@ test "generic toml entrypoint works" {
         };
     };
 
+    const allocator = std.testing.allocator;
+    const decoded = try parseSliceWith(toml, Example, allocator,
+        \\first_name = "Ada"
+        \\
+        \\[metadata]
+        \\account_id = 42
+        \\
+    , .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer typed.free(allocator, decoded);
+
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
-    try serializeWith(toml, &out.writer, Example{
-        .firstName = "Ada",
-        .metadata = .{ .accountId = 42 },
-    }, .{
+    try serializeWith(toml, &out.writer, decoded, .{
         .rename_all = .snake_case,
     }, .{});
 

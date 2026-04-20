@@ -152,7 +152,7 @@ The JSON benchmark harness:
 The TOML benchmark harness:
 
 - compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
-- is serialize-only for now, because `zerde` does not implement TOML deserialize yet
+- is currently write-only; TOML parse benchmarks have not been added yet
 - uses a nested columnar payload so both serializers stay on a valid shared TOML shape
 
 Run everything with:

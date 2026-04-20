@@ -550,7 +550,7 @@ pub fn runTomlBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde TOML benchmark vs zig-toml\n", .{});
     std.debug.print("scenarios: small, medium, large\n", .{});
     std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
-    std.debug.print("note: serialize-only for now; zerde does not implement TOML deserialize yet\n\n", .{});
+    std.debug.print("note: benchmark currently covers writes only; TOML parse benchmarks are not wired in yet\n\n", .{});
 
     inline for (scenarios) |scenario| {
         const result = try runTomlScenario(

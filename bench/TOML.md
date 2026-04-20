@@ -53,4 +53,4 @@ Changes since previous run:
 
 - `zerde` wins clearly on the small payload, while `zig-toml` pulls ahead by about `13-14%` on the medium and large payloads.
 - Output sizes differ slightly because the serializers make different formatting choices, so throughput is reported against each library's own emitted byte count.
-- This benchmark is serialize-only. TOML parse benchmarks will make sense once `zerde` grows a TOML deserializer.
+- This benchmark is still serialize-only. TOML parse benchmarks are the next step now that `zerde` has a TOML deserializer.
