@@ -139,8 +139,8 @@ The TOML backend uses two struct passes so simple key/value pairs are emitted be
 
 ## Benchmarks
 
-JSON benchmark history lives in [BENCHMARK.md](BENCHMARK.md).
-TOML benchmark history lives in [TOML_BENCHMARK.md](TOML_BENCHMARK.md).
+JSON benchmark history lives in [bench/JSON.md](bench/JSON.md).
+TOML benchmark history lives in [bench/TOML.md](bench/TOML.md).
 
 The JSON benchmark harness:
 

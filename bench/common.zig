@@ -1,7 +1,7 @@
-//! Benchmark harness for `zerde` versus established Zig format libraries.
+//! Shared benchmark helpers and workloads for `zerde` format benchmarks.
 //!
-//! The payload is intentionally mixed and nested so we measure the generic typed
-//! walk on realistic data rather than on one dominant scalar pattern.
+//! The payloads are intentionally mixed and nested so we measure the generic
+//! typed walk on realistic data rather than on one dominant scalar pattern.
 
 const std = @import("std");
 const zerde = @import("zerde");
@@ -402,26 +402,12 @@ const TomlScenarioResult = struct {
     write_zig_toml: BenchStats,
 };
 
-pub fn main(init: std.process.Init) !void {
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const io = init.io;
-    const allocator = std.heap.page_allocator;
-
-    const mode = if (args.len >= 2) args[1] else "all";
-    if (std.mem.eql(u8, mode, "json")) {
-        try runJsonBench(io, allocator);
-        return;
-    }
-    if (std.mem.eql(u8, mode, "toml")) {
-        try runTomlBench(io, allocator);
-        return;
-    }
-
+pub fn runAll(io: std.Io, allocator: Allocator) !void {
     try runJsonBench(io, allocator);
     try runTomlBench(io, allocator);
 }
 
-fn runJsonBench(io: std.Io, allocator: Allocator) !void {
+pub fn runJsonBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde JSON benchmark vs std.json\n", .{});
     std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
     std.debug.print("iterations: 1_000_000 / 1_000 / 100\n\n", .{});
@@ -560,7 +546,7 @@ fn printScenarioResult(scenario: Scenario, bytes: usize, result: ScenarioResult)
     std.debug.print("\n", .{});
 }
 
-fn runTomlBench(io: std.Io, allocator: Allocator) !void {
+pub fn runTomlBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde TOML benchmark vs zig-toml\n", .{});
     std.debug.print("scenarios: small, medium, large\n", .{});
     std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});

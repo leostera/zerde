@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
     const bench_exe = b.addExecutable(.{
         .name = "zerde-bench",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/bench.zig"),
+            .root_source_file = b.path("bench/bench.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
