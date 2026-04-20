@@ -1,0 +1,12 @@
+.{
+    .name = .zerde,
+    .version = "0.1.0",
+    .fingerprint = 0x12848f08d95f6a92,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

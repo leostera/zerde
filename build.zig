@@ -1,0 +1,38 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const zerde_mod = b.addModule("zerde", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+    });
+
+    const tests = b.addTest(.{
+        .root_module = zerde_mod,
+    });
+    const run_tests = b.addRunArtifact(tests);
+
+    const test_step = b.step("test", "Run zerde tests");
+    test_step.dependOn(&run_tests.step);
+
+    const bench_exe = b.addExecutable(.{
+        .name = "zerde-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zerde", .module = zerde_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_exe);
+
+    const run_bench = b.addRunArtifact(bench_exe);
+    if (b.args) |args| run_bench.addArgs(args);
+
+    const bench_step = b.step("bench", "Run JSON benchmark against std.json");
+    bench_step.dependOn(&run_bench.step);
+}
