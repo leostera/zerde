@@ -1,8 +1,17 @@
 # zerde
 
-<span style="width: 100%; display: flex; flex-direction: row; justify-content: center;">
-    <img src="./public/shreyas_quote.png" />
-</span>
+<a href="https://x.com/Shreyassanthu77/status/2046350304288100528"
+   style="
+    margin: 10px;
+    min-width: 100%;
+    display: flex;
+    /* flex-wrap: nowrap; */
+    align-content: center;
+    justify-content: center;
+    flex-direction: row;
+">
+  <img src="./public/shreyas_quote.png" />
+</a>
 
 `zerde` is a comptime-specialized serialization library for Zig.
 
