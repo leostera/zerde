@@ -29,13 +29,50 @@ Why columnar instead of row-oriented arrays-of-tables:
 
 Current scenarios:
 
-- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` parse iterations, `1_000_000` write iterations
-- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations
-- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations
+- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` parse iterations, `1_000_000` write iterations, `1_000_000` roundtrip iterations
+- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations, `1_000` roundtrip iterations
+- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations, `100` roundtrip iterations
 
 The current large case produces a canonical parse input of about `68.89 MiB`, with write outputs of about `68.89 MiB` for `zerde` and `70.60 MiB` for `zig-toml`.
 
 Runs before `8ba2955` used the older write-only harness, so the new parse numbers are not comparable to those entries.
+
+## 2026-04-20 - b9b03f2
+
+Changes since previous run:
+
+- added end-to-end TOML roundtrip benchmarks
+- roundtrip now validates `typed -> bytes -> typed` correctness once per scenario before entering the timed loop
+- parse, write, and roundtrip all continue to run on the shared TOML subset accepted by both libraries
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 1000000 | 8213.13 | 342.54 | 18978.32 | 148.24 | `zerde` 2.31x faster |
+| medium | 728,766 B | 1000 | 1854068.58 | 374.85 | 3351989.29 | 207.34 | `zerde` 1.81x faster |
+| large | 72,232,635 B | 100 | 182912285.42 | 376.61 | 327952118.33 | 210.05 | `zerde` 1.79x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 3994.45 | 704.31 | 6355.43 | 457.67 | `zerde` 1.59x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 949205.17 | 732.20 | 830005.38 | 858.36 | `zig-toml` 1.14x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 92975430.41 | 740.91 | 80711253.75 | 874.77 | `zig-toml` 1.15x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 12376.90 | 454.61 | 25941.57 | 224.25 | `zerde` 2.10x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 2803547.71 | 495.80 | 4255314.88 | 334.85 | `zerde` 1.52x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 274027020.83 | 502.77 | 404140020.83 | 349.40 | `zerde` 1.47x faster |
+
+### Notes
+
+- `zerde` still loses TOML write throughput on the medium and large scenarios, but the read advantage is large enough that full roundtrip stays ahead in all three cases.
+- Roundtrip correctness is checked once before timing for each scenario so the measured numbers stay focused on serialization and deserialization work.
 
 ## 2026-04-20 - 8ba2955
 

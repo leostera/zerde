@@ -43,6 +43,7 @@ zig build test
 - TOML compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
+The current harness measures parse, write, and roundtrip (`typed -> bytes -> typed`) cost.
 
 ## Benchmark Policy
 
@@ -60,8 +61,13 @@ Current harness behavior follows that rule:
 
 - JSON compares `zerde.parseSliceAliased(..., Payload, ...)` against `std.json.parseFromSliceLeaky(StdPayload, ...)`, so both sides are timed on their typed parse APIs
 - JSON write compares `zerde.serialize(...)` against `std.json.Stringify.value(...)`, so both sides are timed on their typed serialization APIs
+- JSON roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `std.json.Stringify.value(...) + std.json.parseFromSliceLeaky(...)`
 - TOML parse compares `zerde.parseSlice(..., TomlParsePayload, ...)` against `zig_toml.Parser(TomlParsePayload).parseString(...)`
 - TOML write compares `zerde.serialize(...)` against `zig_toml.serialize(...)`
+- TOML roundtrip compares `zerde.serialize(...) + zerde.parseSlice(...)` against `zig_toml.serialize(...) + zig_toml.Parser(...).parseString(...)`
+
+Roundtrip benchmarks also perform one deep equality check per scenario before timing begins.
+That keeps correctness in the harness without turning the timed region into a struct-comparison benchmark.
 
 If a future comparison target only offers an intermediate representation, the harness should include the required `IR -> typed` or `typed -> IR` step in the measured time.
 

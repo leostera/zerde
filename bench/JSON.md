@@ -21,13 +21,50 @@ Current harness, starting at `8a3a0a9`, uses a mixed nested payload with:
 
 Current scenarios:
 
-- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` parse iterations, `1_000_000` write iterations
-- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations
-- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations
+- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` parse iterations, `1_000_000` write iterations, `1_000_000` roundtrip iterations
+- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations, `1_000` roundtrip iterations
+- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations, `100` roundtrip iterations
 
 The current large case produces a JSON document of about `107.58 MiB`.
 
 Runs before `8a3a0a9` used the older simpler payload, so they are not directly comparable to the newer mixed-payload runs.
+
+## 2026-04-20 - b9b03f2
+
+Changes since previous run:
+
+- added end-to-end JSON roundtrip benchmarks
+- roundtrip now validates `typed -> bytes -> typed` correctness once per scenario before entering the timed loop
+- the harness records separate `std.json` write sizes because `std.json` emits a larger document than `zerde` on the shared mixed payload
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 1000000 | 5610.85 | 661.01 | 12880.34 | 287.95 | `zerde` 2.30x faster |
+| medium | 1,139,497 B | 1000 | 1742032.13 | 623.82 | 3815532.38 | 284.81 | `zerde` 2.19x faster |
+| large | 112,803,589 B | 100 | 173975188.75 | 618.35 | 376462378.75 | 285.76 | `zerde` 2.16x faster |
+
+### Write
+
+| Scenario | zerde Size | std.json Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 4,289 B | 1000000 | 4784.75 | 775.14 | 5506.06 | 742.87 | `zerde` 1.15x faster |
+| medium | 1,139,497 B | 1,202,217 B | 1000 | 1292649.25 | 840.68 | 1533028.00 | 747.88 | `zerde` 1.19x faster |
+| large | 112,803,589 B | 118,794,235 B | 100 | 127489172.09 | 843.82 | 149742352.09 | 756.57 | `zerde` 1.17x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | std.json Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 4,289 B | 1000000 | 10421.09 | 711.80 | 18902.82 | 432.77 | `zerde` 1.81x faster |
+| medium | 1,139,497 B | 1,202,217 B | 1000 | 3054196.46 | 711.62 | 5414850.13 | 423.47 | `zerde` 1.77x faster |
+| large | 112,803,589 B | 118,794,235 B | 100 | 299403212.50 | 718.62 | 531540714.17 | 426.27 | `zerde` 1.78x faster |
+
+### Notes
+
+- `std.json` still parses the same canonical `zerde` input in the parse benchmark, but its own serializer produces a larger output on this workload, so write and roundtrip throughput now use per-library byte counts.
+- Roundtrip correctness is checked once before timing for each scenario so the measured numbers stay focused on serialization and deserialization work.
 
 ## 2026-04-20 - 8ae56d3
 
