@@ -12,6 +12,7 @@ In practice that means you can use the same public API with different formats:
 
 - `zerde.serialize(zerde.json, writer, value)`
 - `zerde.serialize(zerde.toml, writer, value)`
+- `zerde.serialize(zerde.cbor, writer, value)`
 - `zerde.parseSlice(zerde.json, Config, allocator, input)`
 
 The hot paths do not go through a runtime `Value` tree. For supported formats, `zerde` walks your Zig type directly and drives the target format backend in one typed pass.
@@ -27,6 +28,11 @@ The hot paths do not go through a runtime `Value` tree. For supported formats, `
   - serialize: supported
   - deserialize from reader: supported
   - deserialize from slice: supported
+- CBOR
+  - serialize: supported
+  - deserialize from reader: supported
+  - deserialize from slice: supported
+  - aliased slice parse: supported through `parseSliceAliased`
 
 ## Design
 
@@ -36,7 +42,7 @@ The hot paths do not go through a runtime `Value` tree. For supported formats, `
    The public package API. This is where callers choose the format module and pass optional serde config.
 2. `src/typed.zig`
    The format-independent typed walk. It uses `@typeInfo`, `@field`, and `inline for` to reflect over `T` and serialize or deserialize it.
-3. Format backends like `src/json.zig` and `src/toml.zig`
+3. Format backends like `src/json.zig`, `src/toml.zig`, and `src/cbor.zig`
    These implement the serializer or deserializer protocol expected by the typed layer.
 
 This split matters because it keeps format rules and data-shape rules independent:
@@ -144,6 +150,34 @@ Owned TOML parse path:
 const decoded = try zerde.parseSlice(zerde.toml, Config, allocator, input);
 defer zerde.free(allocator, decoded);
 ```
+
+## CBOR Usage
+
+```zig
+const Event = struct {
+    name: []const u8,
+    count: u32,
+
+    pub const serde = .{
+        .rename_all = .snake_case,
+    };
+};
+
+var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+defer out.deinit();
+
+try zerde.serializeWith(zerde.cbor, &out.writer, Event{
+    .name = "signup",
+    .count = 3,
+}, .{
+    .rename_all = .snake_case,
+}, .{});
+
+const decoded = try zerde.parseSlice(zerde.cbor, Event, allocator, out.written());
+defer zerde.free(allocator, decoded);
+```
+
+The CBOR backend writes structs as maps and arrays with their exact lengths. String fields are emitted as CBOR text strings; on read, `[]const u8` and `[N]u8` accept either CBOR text or byte strings.
 
 ## Benchmarks
 

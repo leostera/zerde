@@ -5,6 +5,7 @@
 //! specializes the read or write path for that exact combination.
 
 const std = @import("std");
+const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
 const toml_impl = @import("toml.zig");
 const meta = @import("meta.zig");
@@ -13,6 +14,7 @@ const typed = @import("typed.zig");
 pub const FieldCase = meta.FieldCase;
 pub const SerdeConfig = meta.SerdeConfig;
 
+pub const cbor = cbor_impl;
 pub const json = json_impl;
 pub const toml = toml_impl;
 
@@ -174,9 +176,43 @@ test "generic toml entrypoint works" {
     , out.written());
 }
 
+test "generic cbor entrypoint works" {
+    const Example = struct {
+        firstName: []const u8,
+        metadata: struct {
+            accountId: u64,
+        },
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    const expected = Example{
+        .firstName = "Ada",
+        .metadata = .{
+            .accountId = 42,
+        },
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try serializeWith(cbor, &out.writer, expected, .{
+        .rename_all = .snake_case,
+    }, .{});
+
+    const decoded = try parseSliceWith(cbor, Example, std.testing.allocator, out.written(), .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer typed.free(std.testing.allocator, decoded);
+
+    try std.testing.expectEqualDeep(expected, decoded);
+}
+
 test {
     _ = @import("meta.zig");
     _ = @import("typed.zig");
+    _ = @import("cbor.zig");
     _ = @import("json.zig");
     _ = @import("toml.zig");
 }
