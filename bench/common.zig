@@ -41,6 +41,7 @@ const Scenario = struct {
     event_count: usize,
     parse_iterations: usize,
     write_iterations: usize,
+    roundtrip_iterations: usize,
 };
 
 // Fixed iterations keep successive runs comparable even when implementation speed changes.
@@ -52,6 +53,7 @@ const scenarios = [_]Scenario{
         .event_count = 8,
         .parse_iterations = 1_000_000,
         .write_iterations = 1_000_000,
+        .roundtrip_iterations = 1_000_000,
     },
     .{
         .name = "medium",
@@ -60,6 +62,7 @@ const scenarios = [_]Scenario{
         .event_count = 4_500,
         .parse_iterations = 1_000,
         .write_iterations = 1_000,
+        .roundtrip_iterations = 1_000,
     },
     .{
         .name = "large",
@@ -68,6 +71,7 @@ const scenarios = [_]Scenario{
         .event_count = 450_000,
         .parse_iterations = 100,
         .write_iterations = 100,
+        .roundtrip_iterations = 100,
     },
 };
 
@@ -410,12 +414,18 @@ const BenchCase = struct {
     zerde_value: Payload,
     std_value: StdPayload,
     json_out: std.Io.Writer.Allocating,
+    std_json_out: std.Io.Writer.Allocating,
 
     fn json(self: *BenchCase) []const u8 {
         return self.json_out.written();
     }
 
+    fn stdJson(self: *BenchCase) []const u8 {
+        return self.std_json_out.written();
+    }
+
     fn deinit(self: *BenchCase, allocator: Allocator) void {
+        self.std_json_out.deinit();
         self.json_out.deinit();
         freePayload(allocator, self.zerde_value);
         freeStdPayload(allocator, self.std_value);
@@ -438,10 +448,15 @@ const BenchStats = struct {
 };
 
 const ScenarioResult = struct {
+    parse_bytes: usize,
+    zerde_write_bytes: usize,
+    std_write_bytes: usize,
     parse_zerde: BenchStats,
     parse_std: BenchStats,
     write_zerde: BenchStats,
     write_std: BenchStats,
+    roundtrip_zerde: BenchStats,
+    roundtrip_std: BenchStats,
 };
 
 const TomlScenarioResult = struct {
@@ -452,6 +467,8 @@ const TomlScenarioResult = struct {
     parse_zig_toml: BenchStats,
     write_zerde: BenchStats,
     write_zig_toml: BenchStats,
+    roundtrip_zerde: BenchStats,
+    roundtrip_zig_toml: BenchStats,
 };
 
 pub fn runAll(io: std.Io, allocator: Allocator) !void {
@@ -462,14 +479,15 @@ pub fn runAll(io: std.Io, allocator: Allocator) !void {
 pub fn runJsonBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde JSON benchmark vs std.json\n", .{});
     std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
-    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n\n", .{});
+    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("roundtrip: typed value -> bytes -> typed value, with one correctness check before timing\n\n", .{});
 
     for (scenarios) |scenario| {
         var bench_case = try buildCase(allocator, scenario);
         defer bench_case.deinit(allocator);
 
         const result = try runScenario(io, &bench_case);
-        printScenarioResult(bench_case.scenario, bench_case.json().len, result);
+        printScenarioResult(bench_case.scenario, result);
     }
 
     std.debug.print("\n", .{});
@@ -486,16 +504,24 @@ fn buildCase(allocator: Allocator, scenario: Scenario) !BenchCase {
     errdefer json_out.deinit();
     try zerde.serialize(zerde.json, &json_out.writer, zerde_value);
 
+    var std_json_out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer std_json_out.deinit();
+    try std.json.Stringify.value(std_value, .{}, &std_json_out.writer);
+
     return .{
         .scenario = scenario,
         .zerde_value = zerde_value,
         .std_value = std_value,
         .json_out = json_out,
+        .std_json_out = std_json_out,
     };
 }
 
 fn runScenario(io: std.Io, bench_case: *BenchCase) !ScenarioResult {
     return .{
+        .parse_bytes = bench_case.json().len,
+        .zerde_write_bytes = bench_case.json().len,
+        .std_write_bytes = bench_case.stdJson().len,
         .parse_zerde = .{
             .iterations = bench_case.scenario.parse_iterations,
             .total_ns = try benchZerdeParse(io, bench_case.json(), bench_case.scenario.parse_iterations),
@@ -511,6 +537,14 @@ fn runScenario(io: std.Io, bench_case: *BenchCase) !ScenarioResult {
         .write_std = .{
             .iterations = bench_case.scenario.write_iterations,
             .total_ns = try benchStdSerialize(io, bench_case.std_value, bench_case.scenario.write_iterations),
+        },
+        .roundtrip_zerde = .{
+            .iterations = bench_case.scenario.roundtrip_iterations,
+            .total_ns = try benchZerdeRoundTrip(io, bench_case.zerde_value, bench_case.scenario.roundtrip_iterations),
+        },
+        .roundtrip_std = .{
+            .iterations = bench_case.scenario.roundtrip_iterations,
+            .total_ns = try benchStdRoundTrip(io, bench_case.std_value, bench_case.scenario.roundtrip_iterations),
         },
     };
 }
@@ -569,9 +603,70 @@ fn benchStdSerialize(io: std.Io, value: StdPayload, iterations: usize) !u64 {
     return @intCast(start.untilNow(io).raw.nanoseconds);
 }
 
-fn printScenarioResult(scenario: Scenario, bytes: usize, result: ScenarioResult) void {
+fn benchZerdeRoundTrip(io: std.Io, value: Payload, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try zerde.serialize(zerde.json, &out.writer, value);
+    const check = try zerde.parseSliceAliased(zerde.json, Payload, arena.allocator(), out.written());
+    try assertRoundTripEqual(Payload, value, check);
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try zerde.serialize(zerde.json, &out.writer, value);
+        const parsed = try zerde.parseSliceAliased(zerde.json, Payload, arena.allocator(), out.written());
+        consumePayload(parsed);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchStdRoundTrip(io: std.Io, value: StdPayload, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try std.json.Stringify.value(value, .{}, &out.writer);
+    const check = try std.json.parseFromSliceLeaky(StdPayload, arena.allocator(), out.written(), .{
+        .ignore_unknown_fields = false,
+    });
+    try assertRoundTripEqual(StdPayload, value, check);
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try std.json.Stringify.value(value, .{}, &out.writer);
+        const parsed = try std.json.parseFromSliceLeaky(StdPayload, arena.allocator(), out.written(), .{
+            .ignore_unknown_fields = false,
+        });
+        consumeStdPayload(parsed);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn printScenarioResult(scenario: Scenario, result: ScenarioResult) void {
     std.debug.print("{s}\n", .{scenario.name});
-    std.debug.print("  bytes: {d} ({d:.2} MiB)\n", .{ bytes, bytesToMiB(bytes) });
+    std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
+    });
+    std.debug.print("  zerde write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_write_bytes,
+        bytesToMiB(result.zerde_write_bytes),
+    });
+    std.debug.print("  std.json write bytes: {d} ({d:.2} MiB)\n", .{
+        result.std_write_bytes,
+        bytesToMiB(result.std_write_bytes),
+    });
     std.debug.print("  endpoints / metrics / events: {d} / {d} / {d}\n", .{
         scenario.endpoint_count,
         scenario.metric_count,
@@ -579,21 +674,30 @@ fn printScenarioResult(scenario: Scenario, bytes: usize, result: ScenarioResult)
     });
     std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
     std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  roundtrip iters: {d}\n", .{result.roundtrip_zerde.iterations});
     std.debug.print("  parse  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.parse_zerde.nsPerOp(),
-        result.parse_zerde.mibPerSec(bytes),
+        result.parse_zerde.mibPerSec(result.parse_bytes),
     });
     std.debug.print("  parse std.json: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.parse_std.nsPerOp(),
-        result.parse_std.mibPerSec(bytes),
+        result.parse_std.mibPerSec(result.parse_bytes),
     });
     std.debug.print("  write  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.write_zerde.nsPerOp(),
-        result.write_zerde.mibPerSec(bytes),
+        result.write_zerde.mibPerSec(result.zerde_write_bytes),
     });
     std.debug.print("  write std.json: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.write_std.nsPerOp(),
-        result.write_std.mibPerSec(bytes),
+        result.write_std.mibPerSec(result.std_write_bytes),
+    });
+    std.debug.print("  roundtrip  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zerde.nsPerOp(),
+        result.roundtrip_zerde.mibPerSec(result.zerde_write_bytes * 2),
+    });
+    std.debug.print("  roundtrip std.json: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_std.nsPerOp(),
+        result.roundtrip_std.mibPerSec(result.std_write_bytes * 2),
     });
     std.debug.print("\n", .{});
 }
@@ -602,6 +706,7 @@ pub fn runTomlBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde TOML benchmark vs zig-toml\n", .{});
     std.debug.print("scenarios: small, medium, large\n", .{});
     std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("roundtrip: typed value -> bytes -> typed value, with one correctness check before timing\n", .{});
     std.debug.print("note: parse and write are both measured against the same canonical TOML input per scenario\n\n", .{});
 
     inline for (scenarios) |scenario| {
@@ -611,6 +716,7 @@ pub fn runTomlBench(io: std.Io, allocator: Allocator) !void {
             scenario.event_count,
             scenario.parse_iterations,
             scenario.write_iterations,
+            scenario.roundtrip_iterations,
             io,
             allocator,
         );
@@ -624,6 +730,7 @@ fn runTomlScenario(
     comptime event_count: usize,
     parse_iterations: usize,
     write_iterations: usize,
+    roundtrip_iterations: usize,
     io: std.Io,
     allocator: Allocator,
 ) !TomlScenarioResult {
@@ -658,6 +765,14 @@ fn runTomlScenario(
         .write_zig_toml = .{
             .iterations = write_iterations,
             .total_ns = try benchZigTomlSerialize(io, allocator, value, write_iterations),
+        },
+        .roundtrip_zerde = .{
+            .iterations = roundtrip_iterations,
+            .total_ns = try benchTomlZerdeRoundTrip(io, value, roundtrip_iterations),
+        },
+        .roundtrip_zig_toml = .{
+            .iterations = roundtrip_iterations,
+            .total_ns = try benchZigTomlRoundTrip(io, allocator, value, roundtrip_iterations),
         },
     };
 }
@@ -712,6 +827,54 @@ fn benchZigTomlSerialize(io: std.Io, allocator: Allocator, value: anytype, itera
     return @intCast(start.untilNow(io).raw.nanoseconds);
 }
 
+fn benchTomlZerdeRoundTrip(io: std.Io, value: anytype, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const expected = makeTomlParseView(value);
+    try zerde.serialize(zerde.toml, &out.writer, value);
+    const check = try zerde.parseSlice(zerde.toml, TomlParsePayload, arena.allocator(), out.written());
+    try assertRoundTripEqual(TomlParsePayload, expected, check);
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try zerde.serialize(zerde.toml, &out.writer, value);
+        const parsed = try zerde.parseSlice(zerde.toml, TomlParsePayload, arena.allocator(), out.written());
+        consumeTomlParsed(parsed);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZigTomlRoundTrip(io: std.Io, allocator: Allocator, value: anytype, iterations: usize) !u64 {
+    var parser = zig_toml.Parser(TomlParsePayload).init(allocator);
+    defer parser.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const expected = makeTomlParseView(value);
+    try zig_toml.serialize(allocator, value, &out.writer);
+    var check = try parser.parseString(out.written());
+    defer check.deinit();
+    try assertRoundTripEqual(TomlParsePayload, expected, check.value);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zig_toml.serialize(allocator, value, &out.writer);
+        var parsed = try parser.parseString(out.written());
+        consumeTomlParsed(parsed.value);
+        parsed.deinit();
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
 fn printTomlScenarioResult(comptime scenario: Scenario, result: TomlScenarioResult) void {
     std.debug.print("{s}\n", .{scenario.name});
     std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
@@ -733,6 +896,7 @@ fn printTomlScenarioResult(comptime scenario: Scenario, result: TomlScenarioResu
     });
     std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
     std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  roundtrip iters: {d}\n", .{result.roundtrip_zerde.iterations});
     std.debug.print("  parse    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.parse_zerde.nsPerOp(),
         result.parse_zerde.mibPerSec(result.parse_bytes),
@@ -748,6 +912,14 @@ fn printTomlScenarioResult(comptime scenario: Scenario, result: TomlScenarioResu
     std.debug.print("  write zig-toml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.write_zig_toml.nsPerOp(),
         result.write_zig_toml.mibPerSec(result.zig_toml_write_bytes),
+    });
+    std.debug.print("  roundtrip    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zerde.nsPerOp(),
+        result.roundtrip_zerde.mibPerSec(result.zerde_write_bytes * 2),
+    });
+    std.debug.print("  roundtrip zig-toml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zig_toml.nsPerOp(),
+        result.roundtrip_zig_toml.mibPerSec(result.zig_toml_write_bytes * 2),
     });
     std.debug.print("\n", .{});
 }
@@ -1139,6 +1311,172 @@ fn freeTomlPayload(allocator: Allocator, value: anytype) void {
     allocator.destroy(value.endpoints.paths);
 
     allocator.destroy(value);
+}
+
+fn makeTomlParseView(value: anytype) TomlParsePayload {
+    return .{
+        .service_name = value.service_name,
+        .version = value.version,
+        .healthy = value.healthy,
+        .build_number = value.build_number,
+        .primary_region = value.primary_region,
+        .description = value.description,
+        .signature = value.signature,
+        .metadata = value.metadata,
+        .endpoints = .{
+            .paths = value.endpoints.paths[0..],
+            .methods = value.endpoints.methods[0..],
+            .timeout_ms = value.endpoints.timeout_ms[0..],
+            .retries = value.endpoints.retries[0..],
+            .weights = value.endpoints.weights[0..],
+            .enabled = value.endpoints.enabled[0..],
+        },
+        .metrics = .{
+            .names = value.metrics.names[0..],
+            .kinds = value.metrics.kinds[0..],
+            .current = value.metrics.current[0..],
+            .peak = value.metrics.peak[0..],
+            .ratio = value.metrics.ratio[0..],
+            .notes = value.metrics.notes[0..],
+            .labels = value.metrics.labels[0..],
+        },
+        .events = .{
+            .ids = value.events.ids[0..],
+            .codes = value.events.codes[0..],
+            .ok = value.events.ok[0..],
+            .severity = value.events.severity[0..],
+            .routes = value.events.routes[0..],
+            .region = value.events.region[0..],
+            .duration_micros = value.events.duration_micros[0..],
+            .cpu_load = value.events.cpu_load[0..],
+            .signatures = value.events.signatures[0..],
+            .notes = value.events.notes[0..],
+            .flags = value.events.flags[0..],
+            .samples = value.events.samples[0..],
+        },
+        .sample_windows = value.sample_windows,
+    };
+}
+
+fn assertRoundTripEqual(comptime T: type, expected: T, actual: T) !void {
+    if (!deepEqual(T, expected, actual)) {
+        std.debug.print("roundtrip mismatch for {s}\n", .{@typeName(T)});
+        reportFirstMismatch(T, expected, actual, @typeName(T));
+        return error.RoundTripMismatch;
+    }
+}
+
+fn deepEqual(comptime T: type, expected: T, actual: T) bool {
+    return switch (@typeInfo(T)) {
+        .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => expected == actual,
+        .optional => if (expected) |expected_child|
+            if (actual) |actual_child|
+                deepEqual(@TypeOf(expected_child), expected_child, actual_child)
+            else
+                false
+        else
+            actual == null,
+        .array => |info| blk: {
+            if (info.child == u8) break :blk std.mem.eql(u8, expected[0..], actual[0..]);
+            for (expected, actual) |expected_item, actual_item| {
+                if (!deepEqual(info.child, expected_item, actual_item)) break :blk false;
+            }
+            break :blk true;
+        },
+        .pointer => |info| switch (info.size) {
+            .slice => blk: {
+                if (info.child == u8) break :blk std.mem.eql(u8, expected, actual);
+                if (expected.len != actual.len) break :blk false;
+                for (expected, actual) |expected_item, actual_item| {
+                    if (!deepEqual(info.child, expected_item, actual_item)) break :blk false;
+                }
+                break :blk true;
+            },
+            .one => deepEqual(info.child, expected.*, actual.*),
+            else => false,
+        },
+        .@"struct" => |info| blk: {
+            inline for (info.fields) |field| {
+                if (!deepEqual(field.type, @field(expected, field.name), @field(actual, field.name))) {
+                    break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        else => std.meta.eql(expected, actual),
+    };
+}
+
+fn reportFirstMismatch(comptime T: type, expected: T, actual: T, comptime path: []const u8) void {
+    switch (@typeInfo(T)) {
+        .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => {
+            std.debug.print("  {s}: expected {}, got {}\n", .{ path, expected, actual });
+        },
+        .optional => |info| {
+            if ((expected == null) != (actual == null)) {
+                std.debug.print("  {s}: expected {any}, got {any}\n", .{ path, expected, actual });
+                return;
+            }
+            if (expected) |expected_child| {
+                reportFirstMismatch(info.child, expected_child, actual.?, path);
+            }
+        },
+        .array => |info| {
+            if (info.child == u8) {
+                if (!std.mem.eql(u8, expected[0..], actual[0..])) {
+                    std.debug.print("  {s}: expected \"{s}\", got \"{s}\"\n", .{ path, expected[0..], actual[0..] });
+                }
+                return;
+            }
+            for (expected, actual, 0..) |expected_item, actual_item, i| {
+                if (!deepEqual(info.child, expected_item, actual_item)) {
+                    std.debug.print("  mismatch at {s}[{d}]\n", .{ path, i });
+                    reportFirstMismatch(info.child, expected_item, actual_item, std.fmt.comptimePrint("{s}[]", .{path}));
+                    return;
+                }
+            }
+        },
+        .pointer => |info| switch (info.size) {
+            .slice => {
+                if (info.child == u8) {
+                    if (!std.mem.eql(u8, expected, actual)) {
+                        std.debug.print("  {s}: expected \"{s}\", got \"{s}\"\n", .{ path, expected, actual });
+                    }
+                    return;
+                }
+                if (expected.len != actual.len) {
+                    std.debug.print("  {s}: expected len {d}, got {d}\n", .{ path, expected.len, actual.len });
+                    return;
+                }
+                for (expected, actual, 0..) |expected_item, actual_item, i| {
+                    if (!deepEqual(info.child, expected_item, actual_item)) {
+                        std.debug.print("  mismatch at {s}[{d}]\n", .{ path, i });
+                        reportFirstMismatch(info.child, expected_item, actual_item, std.fmt.comptimePrint("{s}[]", .{path}));
+                        return;
+                    }
+                }
+            },
+            .one => reportFirstMismatch(info.child, expected.*, actual.*, path),
+            else => std.debug.print("  {s}: pointer mismatch in unsupported pointer shape\n", .{path}),
+        },
+        .@"struct" => |info| {
+            inline for (info.fields) |field| {
+                const expected_field = @field(expected, field.name);
+                const actual_field = @field(actual, field.name);
+                if (!deepEqual(field.type, expected_field, actual_field)) {
+                    reportFirstMismatch(
+                        field.type,
+                        expected_field,
+                        actual_field,
+                        std.fmt.comptimePrint("{s}.{s}", .{ path, field.name }),
+                    );
+                    return;
+                }
+            }
+            std.debug.print("  {s}: values differ\n", .{path});
+        },
+        else => std.debug.print("  {s}: mismatch in unsupported type {s}\n", .{ path, @typeName(T) }),
+    }
 }
 
 fn consumeTomlParsed(value: anytype) void {
