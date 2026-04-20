@@ -75,7 +75,14 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
                 try serializer.emitNull();
             }
         },
-        .@"enum" => try serializer.emitString(@tagName(value)),
+        .@"enum" => {
+            const SerializerType = @TypeOf(serializer.*);
+            if (@hasDecl(SerializerType, "emitEnum")) {
+                try serializer.emitEnum(T, value);
+            } else {
+                try serializer.emitString(@tagName(value));
+            }
+        },
         .array => |info| {
             if (info.child == u8) {
                 try serializer.emitString(value[0..]);

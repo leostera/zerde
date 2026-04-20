@@ -72,6 +72,11 @@ pub fn TomlSerializer(comptime Config: type) type {
             try writeBasicString(self.writer, value);
         }
 
+        pub fn emitEnum(self: *Self, comptime Enum: type, value: Enum) !void {
+            try self.ensureValueContext();
+            try writeQuotedEnumTag(self.writer, Enum, value);
+        }
+
         pub fn serializeSequence(self: *Self, comptime Sequence: type, value: Sequence, comptime cfg: anytype) !bool {
             _ = cfg;
             if (!isInlineSequenceType(Sequence)) return false;
@@ -248,7 +253,7 @@ pub fn TomlSerializer(comptime Config: type) type {
                 .bool => try writeBool(self.writer, value),
                 .int, .comptime_int => try writeInteger(self.writer, value),
                 .float, .comptime_float => try writeFloat(self.writer, value),
-                .@"enum" => try writeBasicString(self.writer, @tagName(value)),
+                .@"enum" => try writeQuotedEnumTag(self.writer, T, value),
                 .optional => {
                     if (value) |child| {
                         try self.writeInlineValue(@TypeOf(child), child);
@@ -299,7 +304,7 @@ pub fn TomlSerializer(comptime Config: type) type {
                 },
                 .@"enum" => for (value) |item| {
                     try writeInlineSeparator(self.writer, &first);
-                    try writeBasicString(self.writer, @tagName(item));
+                    try writeQuotedEnumTag(self.writer, Child, item);
                 },
                 .array => |info| {
                     if (info.child == u8) {
@@ -511,6 +516,16 @@ fn writeEscapedTomlByte(writer: *std.Io.Writer, byte: u8) !void {
         },
         else => unreachable,
     }
+}
+
+fn writeQuotedEnumTag(writer: *std.Io.Writer, comptime Enum: type, value: Enum) !void {
+    inline for (@typeInfo(Enum).@"enum".fields) |field| {
+        if (@intFromEnum(value) == field.value) {
+            try writer.writeAll(std.fmt.comptimePrint("\"{s}\"", .{field.name}));
+            return;
+        }
+    }
+    unreachable;
 }
 
 fn writeInlineSeparator(writer: *std.Io.Writer, first: *bool) !void {
