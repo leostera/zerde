@@ -21,6 +21,8 @@ pub fn TomlSerializer(comptime Config: type) type {
         cfg: Config,
         table_path: [64][]const u8 = undefined,
         table_path_len: usize = 0,
+        array_table_field_stack: [64][]const u8 = undefined,
+        array_table_field_len: usize = 0,
         inline_array_first: [64]bool = undefined,
         inline_array_len: usize = 0,
         current_field: ?[]const u8 = null,
@@ -101,6 +103,7 @@ pub fn TomlSerializer(comptime Config: type) type {
 
             if (isArrayOfStructs(FieldType)) {
                 // Arrays of structs are emitted one element at a time as array-of-table entries.
+                try self.pushArrayTableField(name);
                 return true;
             }
 
@@ -121,6 +124,7 @@ pub fn TomlSerializer(comptime Config: type) type {
             }
 
             if (isArrayOfStructs(FieldType)) {
+                self.popArrayTableField();
                 self.current_field = null;
                 self.wrote_anything = true;
                 return;
@@ -151,7 +155,10 @@ pub fn TomlSerializer(comptime Config: type) type {
         pub fn beginArrayItem(self: *Self, comptime Child: type, index: usize) !void {
             _ = index;
             if (isStructType(Child)) {
-                const field_name = self.current_field orelse return error.InvalidTomlState;
+                const field_name = if (self.array_table_field_len != 0)
+                    self.array_table_field_stack[self.array_table_field_len - 1]
+                else
+                    self.current_field orelse return error.InvalidTomlState;
                 try self.writeTableHeader(field_name, true);
                 try self.pushTable(field_name);
                 return;
@@ -237,6 +244,16 @@ pub fn TomlSerializer(comptime Config: type) type {
             self.inline_array_first[self.inline_array_len] = true;
             self.inline_array_len += 1;
         }
+
+        fn pushArrayTableField(self: *Self, field_name: []const u8) !void {
+            if (self.array_table_field_len == self.array_table_field_stack.len) return error.TomlNestingTooDeep;
+            self.array_table_field_stack[self.array_table_field_len] = field_name;
+            self.array_table_field_len += 1;
+        }
+
+        fn popArrayTableField(self: *Self) void {
+            self.array_table_field_len -= 1;
+        }
     };
 }
 
@@ -266,7 +283,11 @@ fn isStructType(comptime T: type) bool {
 fn isArrayOfStructs(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .array => |info| isStructType(info.child),
-        .pointer => |info| info.size == .slice and isStructType(info.child),
+        .pointer => |info| switch (info.size) {
+            .slice => isStructType(info.child),
+            .one => isArrayOfStructs(info.child),
+            else => false,
+        },
         else => false,
     };
 }

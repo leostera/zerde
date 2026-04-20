@@ -1,3 +1,4 @@
 3rdparty/
 .zig-cache/
 zig-out/
+zig-pkg/

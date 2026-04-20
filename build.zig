@@ -3,6 +3,10 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const zig_toml_dep = b.dependency("toml", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     // The package itself is just `src/root.zig`; tests and benchmarks import it.
     const zerde_mod = b.addModule("zerde", .{
@@ -28,6 +32,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zerde", .module = zerde_mod },
+                .{ .name = "zig_toml", .module = zig_toml_dep.module("toml") },
             },
         }),
     });
@@ -36,6 +41,18 @@ pub fn build(b: *std.Build) void {
     const run_bench = b.addRunArtifact(bench_exe);
     if (b.args) |args| run_bench.addArgs(args);
 
-    const bench_step = b.step("bench", "Run JSON benchmark against std.json");
+    const run_bench_json = b.addRunArtifact(bench_exe);
+    run_bench_json.addArg("json");
+
+    const run_bench_toml = b.addRunArtifact(bench_exe);
+    run_bench_toml.addArg("toml");
+
+    const bench_step = b.step("bench", "Run JSON and TOML benchmarks");
     bench_step.dependOn(&run_bench.step);
+
+    const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
+    bench_json_step.dependOn(&run_bench_json.step);
+
+    const bench_toml_step = b.step("bench-toml", "Run TOML benchmark against zig-toml");
+    bench_toml_step.dependOn(&run_bench_toml.step);
 }

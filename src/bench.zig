@@ -1,10 +1,11 @@
-//! Benchmark harness for `zerde` versus Zig's `std.json`.
+//! Benchmark harness for `zerde` versus established Zig format libraries.
 //!
 //! The payload is intentionally mixed and nested so we measure the generic typed
 //! walk on realistic data rather than on one dominant scalar pattern.
 
 const std = @import("std");
 const zerde = @import("zerde");
+const zig_toml = @import("zig_toml");
 
 const Allocator = std.mem.Allocator;
 
@@ -282,6 +283,79 @@ const StdPayload = struct {
     sample_windows: [3]u32,
 };
 
+const toml_notes = [_][]const u8{
+    "steady state",
+    "slow \"db\" branch",
+    "cache miss\nretry",
+    "regional failover active",
+};
+
+const TomlMetadata = struct {
+    owner_id: u64,
+    shard_count: u16,
+    public_url: []const u8,
+    trace_salt: []const u8,
+    release_name: ?[]const u8,
+    hot: bool,
+};
+
+fn TomlEndpointColumns(comptime endpoint_count: usize) type {
+    return struct {
+        paths: *const [endpoint_count][]const u8,
+        methods: *const [endpoint_count]HttpMethod,
+        timeout_ms: *const [endpoint_count]u32,
+        retries: *const [endpoint_count]u8,
+        weights: *const [endpoint_count][4]f32,
+        enabled: *const [endpoint_count]bool,
+    };
+}
+
+fn TomlMetricColumns(comptime metric_count: usize) type {
+    return struct {
+        names: *const [metric_count][]const u8,
+        kinds: *const [metric_count]MetricKind,
+        current: *const [metric_count]i64,
+        peak: *const [metric_count]u64,
+        ratio: *const [metric_count]f32,
+        notes: *const [metric_count][]const u8,
+        labels: *const [metric_count][3][]const u8,
+    };
+}
+
+fn TomlEventColumns(comptime event_count: usize) type {
+    return struct {
+        ids: *const [event_count]u64,
+        codes: *const [event_count]i32,
+        ok: *const [event_count]bool,
+        severity: *const [event_count]Severity,
+        routes: *const [event_count][]const u8,
+        region: *const [event_count]Region,
+        duration_micros: *const [event_count]u32,
+        cpu_load: *const [event_count]f32,
+        signatures: *const [event_count][]const u8,
+        notes: *const [event_count][]const u8,
+        flags: *const [event_count][4]bool,
+        samples: *const [event_count][4]u16,
+    };
+}
+
+fn TomlPayload(comptime endpoint_count: usize, comptime metric_count: usize, comptime event_count: usize) type {
+    return struct {
+        service_name: []const u8,
+        version: u32,
+        healthy: bool,
+        build_number: i64,
+        primary_region: Region,
+        description: ?[]const u8,
+        signature: []const u8,
+        metadata: TomlMetadata,
+        endpoints: TomlEndpointColumns(endpoint_count),
+        metrics: TomlMetricColumns(metric_count),
+        events: TomlEventColumns(event_count),
+        sample_windows: [3]u32,
+    };
+}
+
 const BenchCase = struct {
     scenario: Scenario,
     zerde_value: Payload,
@@ -321,10 +395,33 @@ const ScenarioResult = struct {
     write_std: BenchStats,
 };
 
+const TomlScenarioResult = struct {
+    zerde_bytes: usize,
+    zig_toml_bytes: usize,
+    write_zerde: BenchStats,
+    write_zig_toml: BenchStats,
+};
+
 pub fn main(init: std.process.Init) !void {
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
     const io = init.io;
     const allocator = std.heap.page_allocator;
 
+    const mode = if (args.len >= 2) args[1] else "all";
+    if (std.mem.eql(u8, mode, "json")) {
+        try runJsonBench(io, allocator);
+        return;
+    }
+    if (std.mem.eql(u8, mode, "toml")) {
+        try runTomlBench(io, allocator);
+        return;
+    }
+
+    try runJsonBench(io, allocator);
+    try runTomlBench(io, allocator);
+}
+
+fn runJsonBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde JSON benchmark vs std.json\n", .{});
     std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
     std.debug.print("iterations: 1_000_000 / 1_000 / 100\n\n", .{});
@@ -336,6 +433,8 @@ pub fn main(init: std.process.Init) !void {
         const result = try runScenario(io, &bench_case);
         printScenarioResult(bench_case.scenario, bench_case.json().len, result);
     }
+
+    std.debug.print("\n", .{});
 }
 
 fn buildCase(allocator: Allocator, scenario: Scenario) !BenchCase {
@@ -457,6 +556,109 @@ fn printScenarioResult(scenario: Scenario, bytes: usize, result: ScenarioResult)
     std.debug.print("  write std.json: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.write_std.nsPerOp(),
         result.write_std.mibPerSec(bytes),
+    });
+    std.debug.print("\n", .{});
+}
+
+fn runTomlBench(io: std.Io, allocator: Allocator) !void {
+    std.debug.print("zerde TOML benchmark vs zig-toml\n", .{});
+    std.debug.print("scenarios: small, medium, large\n", .{});
+    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("note: serialize-only for now; zerde does not implement TOML deserialize yet\n\n", .{});
+
+    inline for (scenarios) |scenario| {
+        const result = try runTomlScenario(
+            scenario.endpoint_count,
+            scenario.metric_count,
+            scenario.event_count,
+            scenario.write_iterations,
+            io,
+            allocator,
+        );
+        printTomlScenarioResult(scenario, result);
+    }
+}
+
+fn runTomlScenario(
+    comptime endpoint_count: usize,
+    comptime metric_count: usize,
+    comptime event_count: usize,
+    write_iterations: usize,
+    io: std.Io,
+    allocator: Allocator,
+) !TomlScenarioResult {
+    const value = try makeTomlPayload(endpoint_count, metric_count, event_count, allocator);
+    defer freeTomlPayload(allocator, value);
+
+    var zerde_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zerde_out.deinit();
+    try zerde.serialize(zerde.toml, &zerde_out.writer, value);
+
+    var zig_toml_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zig_toml_out.deinit();
+    try zig_toml.serialize(allocator, value, &zig_toml_out.writer);
+
+    return .{
+        .zerde_bytes = zerde_out.written().len,
+        .zig_toml_bytes = zig_toml_out.written().len,
+        .write_zerde = .{
+            .iterations = write_iterations,
+            .total_ns = try benchTomlZerdeSerialize(io, value, write_iterations),
+        },
+        .write_zig_toml = .{
+            .iterations = write_iterations,
+            .total_ns = try benchZigTomlSerialize(io, allocator, value, write_iterations),
+        },
+    };
+}
+
+fn benchTomlZerdeSerialize(io: std.Io, value: anytype, iterations: usize) !u64 {
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zerde.serialize(zerde.toml, &out.writer, value);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZigTomlSerialize(io: std.Io, allocator: Allocator, value: anytype, iterations: usize) !u64 {
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zig_toml.serialize(allocator, value, &out.writer);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn printTomlScenarioResult(comptime scenario: Scenario, result: TomlScenarioResult) void {
+    std.debug.print("{s}\n", .{scenario.name});
+    std.debug.print("  zerde bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_bytes,
+        bytesToMiB(result.zerde_bytes),
+    });
+    std.debug.print("  zig-toml bytes: {d} ({d:.2} MiB)\n", .{
+        result.zig_toml_bytes,
+        bytesToMiB(result.zig_toml_bytes),
+    });
+    std.debug.print("  endpoints / metrics / events: {d} / {d} / {d}\n", .{
+        scenario.endpoint_count,
+        scenario.metric_count,
+        scenario.event_count,
+    });
+    std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  write    zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zerde.nsPerOp(),
+        result.write_zerde.mibPerSec(result.zerde_bytes),
+    });
+    std.debug.print("  write zig-toml: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zig_toml.nsPerOp(),
+        result.write_zig_toml.mibPerSec(result.zig_toml_bytes),
     });
     std.debug.print("\n", .{});
 }
@@ -645,6 +847,209 @@ fn makeStdPayload(allocator: Allocator, scenario: Scenario) !StdPayload {
         .events = events,
         .sample_windows = .{ 60, 300, 900 },
     };
+}
+
+fn makeTomlPayload(
+    comptime endpoint_count: usize,
+    comptime metric_count: usize,
+    comptime event_count: usize,
+    allocator: Allocator,
+) !*TomlPayload(endpoint_count, metric_count, event_count) {
+    const PayloadType = TomlPayload(endpoint_count, metric_count, event_count);
+    const value = try allocator.create(PayloadType);
+    errdefer allocator.destroy(value);
+
+    const endpoint_paths_array = try allocator.create([endpoint_count][]const u8);
+    errdefer allocator.destroy(endpoint_paths_array);
+    const endpoint_methods = try allocator.create([endpoint_count]HttpMethod);
+    errdefer allocator.destroy(endpoint_methods);
+    const endpoint_timeout_ms = try allocator.create([endpoint_count]u32);
+    errdefer allocator.destroy(endpoint_timeout_ms);
+    const endpoint_retries = try allocator.create([endpoint_count]u8);
+    errdefer allocator.destroy(endpoint_retries);
+    const endpoint_weights = try allocator.create([endpoint_count][4]f32);
+    errdefer allocator.destroy(endpoint_weights);
+    const endpoint_enabled = try allocator.create([endpoint_count]bool);
+    errdefer allocator.destroy(endpoint_enabled);
+
+    const metric_names_array = try allocator.create([metric_count][]const u8);
+    errdefer allocator.destroy(metric_names_array);
+    const metric_kinds = try allocator.create([metric_count]MetricKind);
+    errdefer allocator.destroy(metric_kinds);
+    const metric_current = try allocator.create([metric_count]i64);
+    errdefer allocator.destroy(metric_current);
+    const metric_peak = try allocator.create([metric_count]u64);
+    errdefer allocator.destroy(metric_peak);
+    const metric_ratio = try allocator.create([metric_count]f32);
+    errdefer allocator.destroy(metric_ratio);
+    const metric_notes = try allocator.create([metric_count][]const u8);
+    errdefer allocator.destroy(metric_notes);
+    const metric_labels = try allocator.create([metric_count][3][]const u8);
+    errdefer allocator.destroy(metric_labels);
+
+    const event_ids = try allocator.create([event_count]u64);
+    errdefer allocator.destroy(event_ids);
+    const event_codes = try allocator.create([event_count]i32);
+    errdefer allocator.destroy(event_codes);
+    const event_ok = try allocator.create([event_count]bool);
+    errdefer allocator.destroy(event_ok);
+    const event_severity = try allocator.create([event_count]Severity);
+    errdefer allocator.destroy(event_severity);
+    const event_routes_array = try allocator.create([event_count][]const u8);
+    errdefer allocator.destroy(event_routes_array);
+    const event_region = try allocator.create([event_count]Region);
+    errdefer allocator.destroy(event_region);
+    const event_duration_micros = try allocator.create([event_count]u32);
+    errdefer allocator.destroy(event_duration_micros);
+    const event_cpu_load = try allocator.create([event_count]f32);
+    errdefer allocator.destroy(event_cpu_load);
+    const event_signatures_array = try allocator.create([event_count][]const u8);
+    errdefer allocator.destroy(event_signatures_array);
+    const event_notes = try allocator.create([event_count][]const u8);
+    errdefer allocator.destroy(event_notes);
+    const event_flags = try allocator.create([event_count][4]bool);
+    errdefer allocator.destroy(event_flags);
+    const event_samples = try allocator.create([event_count][4]u16);
+    errdefer allocator.destroy(event_samples);
+
+    for (endpoint_paths_array, 0..) |*path, i| {
+        path.* = endpoint_paths[i % endpoint_paths.len];
+        endpoint_methods[i] = switch (i % 4) {
+            0 => .GET,
+            1 => .POST,
+            2 => .PATCH,
+            else => .DELETE,
+        };
+        endpoint_timeout_ms[i] = @as(u32, @intCast(25 + ((i * 7) % 1500)));
+        endpoint_retries[i] = @as(u8, @intCast((i % 5) + 1));
+        endpoint_weights[i] = weight_templates[i % weight_templates.len];
+        endpoint_enabled[i] = (i % 5) != 0;
+    }
+
+    for (metric_names_array, 0..) |*name, i| {
+        name.* = metric_names[i % metric_names.len];
+        metric_kinds[i] = switch (i % 3) {
+            0 => .counter,
+            1 => .gauge,
+            else => .histogram,
+        };
+        metric_current[i] = @as(i64, @intCast((i % 40_000))) - 20_000;
+        metric_peak[i] = @as(u64, @intCast(100_000 + (i % 4_000_000)));
+        metric_ratio[i] = @as(f32, @floatFromInt(i % 1000)) / 1000.0;
+        metric_notes[i] = toml_notes[i % toml_notes.len];
+        metric_labels[i] = .{
+            label_pool[i % label_pool.len],
+            label_pool[(i + 1) % label_pool.len],
+            label_pool[(i + 2) % label_pool.len],
+        };
+    }
+
+    for (event_ids, 0..) |*id, i| {
+        id.* = 10_000 + i;
+        event_codes[i] = @as(i32, @intCast((i % 5000))) - 2500;
+        event_ok[i] = (i % 11) != 0;
+        event_severity[i] = switch (i % 3) {
+            0 => .info,
+            1 => .warn,
+            else => .critical,
+        };
+        event_routes_array[i] = event_routes[i % event_routes.len];
+        event_region[i] = switch (i % 3) {
+            0 => .us_east_1,
+            1 => .eu_central_1,
+            else => .ap_south_1,
+        };
+        event_duration_micros[i] = @as(u32, @intCast(120 + (i % 35_000)));
+        event_cpu_load[i] = @as(f32, @floatFromInt(i % 1000)) / 1000.0;
+        event_signatures_array[i] = metric_names[i % metric_names.len];
+        event_notes[i] = toml_notes[(i + 1) % toml_notes.len];
+        event_flags[i] = flag_templates[i % flag_templates.len];
+        event_samples[i] = sample_templates[i % sample_templates.len];
+    }
+
+    value.* = .{
+        .service_name = "edge-api",
+        .version = 7,
+        .healthy = true,
+        .build_number = -42,
+        .primary_region = .us_east_1,
+        .description = "critical path\nrelease candidate",
+        .signature = "release-2026-04a",
+        .metadata = .{
+            .owner_id = 42,
+            .shard_count = 16,
+            .public_url = "https://api.example.com/public",
+            .trace_salt = "salt-001",
+            .release_name = "2026.04-hotfix",
+            .hot = true,
+        },
+        .endpoints = .{
+            .paths = endpoint_paths_array,
+            .methods = endpoint_methods,
+            .timeout_ms = endpoint_timeout_ms,
+            .retries = endpoint_retries,
+            .weights = endpoint_weights,
+            .enabled = endpoint_enabled,
+        },
+        .metrics = .{
+            .names = metric_names_array,
+            .kinds = metric_kinds,
+            .current = metric_current,
+            .peak = metric_peak,
+            .ratio = metric_ratio,
+            .notes = metric_notes,
+            .labels = metric_labels,
+        },
+        .events = .{
+            .ids = event_ids,
+            .codes = event_codes,
+            .ok = event_ok,
+            .severity = event_severity,
+            .routes = event_routes_array,
+            .region = event_region,
+            .duration_micros = event_duration_micros,
+            .cpu_load = event_cpu_load,
+            .signatures = event_signatures_array,
+            .notes = event_notes,
+            .flags = event_flags,
+            .samples = event_samples,
+        },
+        .sample_windows = .{ 60, 300, 900 },
+    };
+
+    return value;
+}
+
+fn freeTomlPayload(allocator: Allocator, value: anytype) void {
+    allocator.destroy(value.events.samples);
+    allocator.destroy(value.events.flags);
+    allocator.destroy(value.events.notes);
+    allocator.destroy(value.events.signatures);
+    allocator.destroy(value.events.cpu_load);
+    allocator.destroy(value.events.duration_micros);
+    allocator.destroy(value.events.region);
+    allocator.destroy(value.events.routes);
+    allocator.destroy(value.events.severity);
+    allocator.destroy(value.events.ok);
+    allocator.destroy(value.events.codes);
+    allocator.destroy(value.events.ids);
+
+    allocator.destroy(value.metrics.labels);
+    allocator.destroy(value.metrics.notes);
+    allocator.destroy(value.metrics.ratio);
+    allocator.destroy(value.metrics.peak);
+    allocator.destroy(value.metrics.current);
+    allocator.destroy(value.metrics.kinds);
+    allocator.destroy(value.metrics.names);
+
+    allocator.destroy(value.endpoints.enabled);
+    allocator.destroy(value.endpoints.weights);
+    allocator.destroy(value.endpoints.retries);
+    allocator.destroy(value.endpoints.timeout_ms);
+    allocator.destroy(value.endpoints.methods);
+    allocator.destroy(value.endpoints.paths);
+
+    allocator.destroy(value);
 }
 
 fn consumePayload(value: Payload) void {

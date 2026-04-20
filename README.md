@@ -139,19 +139,38 @@ The TOML backend uses two struct passes so simple key/value pairs are emitted be
 
 ## Benchmarks
 
-Benchmark history lives in [BENCHMARK.md](BENCHMARK.md).
+JSON benchmark history lives in [BENCHMARK.md](BENCHMARK.md).
+TOML benchmark history lives in [TOML_BENCHMARK.md](TOML_BENCHMARK.md).
 
-The benchmark harness:
+The JSON benchmark harness:
 
 - compares `zerde` against Zig's `std.json`
 - uses small, medium, and large scenarios
 - exercises a mixed nested payload instead of a synthetic single-type document
 - uses `parseSliceAliased` on the `zerde` side and `parseFromSliceLeaky` on the `std.json` side for a fair slice-parse comparison
 
-Run it with:
+The TOML benchmark harness:
+
+- compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
+- is serialize-only for now, because `zerde` does not implement TOML deserialize yet
+- uses a nested columnar payload so both serializers stay on a valid shared TOML shape
+
+Run everything with:
 
 ```sh
 zig build bench -Doptimize=ReleaseFast
+```
+
+Run JSON only with:
+
+```sh
+zig build bench-json -Doptimize=ReleaseFast
+```
+
+Run TOML only with:
+
+```sh
+zig build bench-toml -Doptimize=ReleaseFast
 ```
 
 Run tests with:
