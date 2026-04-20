@@ -40,6 +40,7 @@ zig build bench-yaml -Doptimize=ReleaseFast
 
 Benchmark workflow and benchmark-log conventions live in [bench/README.md](bench/README.md).
 That file also defines benchmark fairness policy: time the full public usage path, including any mandatory intermediate-representation conversion required by a compared library.
+The benchmark runner itself is built on `zBench`.
 
 ## Commit Style
 

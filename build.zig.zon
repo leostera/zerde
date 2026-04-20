@@ -12,6 +12,10 @@
             .url = "git+https://codeberg.org/r4gus/zbor#e96cd55a111bcbd76b1b51e4988a44ead1b0b48e",
             .hash = "zbor-0.21.1-kr-CoPJ7AwCFwvJhlhfWF-E4qI7rnHF0MM0NwuZ1WOdU",
         },
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zBench/archive/c24d128bfa80ec6a1b495b84ec827c6a0bec7865.tar.gz",
+            .hash = "zbench-0.11.2-YTdc76Q_AQAxonIKZ2-H1PdcESJGwyuYylw6RkPiBqyx",
+        },
     },
     .paths = .{
         ".githooks",

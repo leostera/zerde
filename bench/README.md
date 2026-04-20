@@ -2,6 +2,8 @@
 
 This directory contains the benchmark harness and benchmark history for `zerde`.
 
+The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) for timing and result collection while keeping `zerde`'s existing scenario workloads, fairness policy, and benchmark-history files.
+
 ## Layout
 
 - `bench/bench.zig`: benchmark entrypoint
@@ -62,6 +64,7 @@ zig build test
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
 The current harness measures parse, write, and roundtrip (`typed -> bytes -> typed`) cost.
+`zBench` is configured with the same fixed per-scenario iteration counts that the repo used before the migration so successive runs stay comparable.
 
 ## Benchmark Policy
 

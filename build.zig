@@ -11,6 +11,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const zbench_dep = b.dependency("zbench", .{
+        .target = target,
+        .optimize = optimize,
+    });
     const zig_yaml_mod = b.createModule(.{
         .root_source_file = b.path("vendor/zig-yaml/src/lib.zig"),
         .target = target,
@@ -43,6 +47,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zerde", .module = zerde_mod },
                 .{ .name = "zig_toml", .module = zig_toml_dep.module("toml") },
                 .{ .name = "zbor", .module = zbor_dep.module("zbor") },
+                .{ .name = "zbench", .module = zbench_dep.module("zbench") },
                 .{ .name = "zig_yaml", .module = zig_yaml_mod },
             },
         }),

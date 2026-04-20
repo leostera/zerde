@@ -7,6 +7,7 @@ const std = @import("std");
 const zerde = @import("zerde");
 const zig_toml = @import("zig_toml");
 const zig_yaml = @import("zig_yaml");
+const zbench = @import("zbench");
 const zbor = @import("zbor");
 
 const Allocator = std.mem.Allocator;
@@ -563,6 +564,46 @@ const BenchStats = struct {
     }
 };
 
+fn benchStatsFromResult(result: zbench.Result) !BenchStats {
+    const timing_stats = try zbench.statistics.Statistics(u64).init(result.readings.timings_ns);
+    return .{
+        .iterations = result.readings.iterations,
+        .total_ns = timing_stats.total,
+    };
+}
+
+fn runZbenchParam(
+    io: std.Io,
+    allocator: Allocator,
+    name: []const u8,
+    benchmark: anytype,
+    iterations: usize,
+) !BenchStats {
+    const BenchmarkPtr = @TypeOf(benchmark);
+    const pointer_info = @typeInfo(BenchmarkPtr);
+    if (pointer_info != .pointer) @compileError("benchmark context must be a pointer");
+    const BenchmarkType = pointer_info.pointer.child;
+    const const_benchmark: *const BenchmarkType = benchmark;
+
+    var bench = zbench.Benchmark.init(allocator, .{});
+    defer bench.deinit();
+
+    try bench.addParam(name, const_benchmark, .{
+        .iterations = @intCast(iterations),
+    });
+
+    var iter = try bench.iterator();
+    while (try iter.next(io)) |step| switch (step) {
+        .progress => {},
+        .result => |result| {
+            defer result.deinit();
+            return try benchStatsFromResult(result);
+        },
+    };
+
+    return error.MissingBenchmarkResult;
+}
+
 const ScenarioResult = struct {
     parse_bytes: usize,
     zerde_write_bytes: usize,
@@ -628,7 +669,7 @@ pub fn runJsonBench(io: std.Io, allocator: Allocator) !void {
         var bench_case = try buildCase(allocator, scenario);
         defer bench_case.deinit(allocator);
 
-        const result = try runScenario(io, &bench_case);
+        const result = try runScenario(io, allocator, &bench_case);
         printScenarioResult(bench_case.scenario, result);
     }
 
@@ -659,35 +700,192 @@ fn buildCase(allocator: Allocator, scenario: Scenario) !BenchCase {
     };
 }
 
-fn runScenario(io: std.Io, bench_case: *BenchCase) !ScenarioResult {
+fn runScenario(io: std.Io, allocator: Allocator, bench_case: *BenchCase) !ScenarioResult {
+    const JsonZerdeParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = zerde.parseSliceAliased(zerde.json, Payload, self.arena.allocator(), self.input) catch @panic("zerde JSON parse failed");
+            consumePayload(value);
+        }
+    };
+
+    const JsonStdParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = std.json.parseFromSliceLeaky(StdPayload, self.arena.allocator(), self.input, .{
+                .ignore_unknown_fields = false,
+            }) catch @panic("std.json parse failed");
+            consumeStdPayload(value);
+        }
+    };
+
+    const JsonZerdeSerialize = struct {
+        value: Payload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: Payload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.json, &self.out.writer, self.value) catch @panic("zerde JSON serialize failed");
+        }
+    };
+
+    const JsonStdSerialize = struct {
+        value: StdPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: StdPayload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            std.json.Stringify.value(self.value, .{}, &self.out.writer) catch @panic("std.json serialize failed");
+        }
+    };
+
+    const JsonZerdeRoundTrip = struct {
+        value: Payload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: Payload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zerde.serialize(zerde.json, &self.out.writer, self.value);
+            const check = try zerde.parseSliceAliased(zerde.json, Payload, self.arena.allocator(), self.out.written());
+            try assertRoundTripEqual(Payload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.json, &self.out.writer, self.value) catch @panic("zerde JSON roundtrip serialize failed");
+            const parsed = zerde.parseSliceAliased(zerde.json, Payload, self.arena.allocator(), self.out.written()) catch @panic("zerde JSON roundtrip parse failed");
+            consumePayload(parsed);
+        }
+    };
+
+    const JsonStdRoundTrip = struct {
+        value: StdPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: StdPayload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try std.json.Stringify.value(self.value, .{}, &self.out.writer);
+            const check = try std.json.parseFromSliceLeaky(StdPayload, self.arena.allocator(), self.out.written(), .{
+                .ignore_unknown_fields = false,
+            });
+            try assertRoundTripEqual(StdPayload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            std.json.Stringify.value(self.value, .{}, &self.out.writer) catch @panic("std.json roundtrip serialize failed");
+            const parsed = std.json.parseFromSliceLeaky(StdPayload, self.arena.allocator(), self.out.written(), .{
+                .ignore_unknown_fields = false,
+            }) catch @panic("std.json roundtrip parse failed");
+            consumeStdPayload(parsed);
+        }
+    };
+
+    var parse_zerde = JsonZerdeParse.init(bench_case.json());
+    defer parse_zerde.deinit();
+    var parse_std = JsonStdParse.init(bench_case.json());
+    defer parse_std.deinit();
+    var write_zerde = JsonZerdeSerialize.init(bench_case.zerde_value);
+    defer write_zerde.deinit();
+    var write_std = JsonStdSerialize.init(bench_case.std_value);
+    defer write_std.deinit();
+    var roundtrip_zerde = try JsonZerdeRoundTrip.init(bench_case.zerde_value);
+    defer roundtrip_zerde.deinit();
+    var roundtrip_std = try JsonStdRoundTrip.init(bench_case.std_value);
+    defer roundtrip_std.deinit();
+
     return .{
         .parse_bytes = bench_case.json().len,
         .zerde_write_bytes = bench_case.json().len,
         .std_write_bytes = bench_case.stdJson().len,
-        .parse_zerde = .{
-            .iterations = bench_case.scenario.parse_iterations,
-            .total_ns = try benchZerdeParse(io, bench_case.json(), bench_case.scenario.parse_iterations),
-        },
-        .parse_std = .{
-            .iterations = bench_case.scenario.parse_iterations,
-            .total_ns = try benchStdParse(io, bench_case.json(), bench_case.scenario.parse_iterations),
-        },
-        .write_zerde = .{
-            .iterations = bench_case.scenario.write_iterations,
-            .total_ns = try benchZerdeSerialize(io, bench_case.zerde_value, bench_case.scenario.write_iterations),
-        },
-        .write_std = .{
-            .iterations = bench_case.scenario.write_iterations,
-            .total_ns = try benchStdSerialize(io, bench_case.std_value, bench_case.scenario.write_iterations),
-        },
-        .roundtrip_zerde = .{
-            .iterations = bench_case.scenario.roundtrip_iterations,
-            .total_ns = try benchZerdeRoundTrip(io, bench_case.zerde_value, bench_case.scenario.roundtrip_iterations),
-        },
-        .roundtrip_std = .{
-            .iterations = bench_case.scenario.roundtrip_iterations,
-            .total_ns = try benchStdRoundTrip(io, bench_case.std_value, bench_case.scenario.roundtrip_iterations),
-        },
+        .parse_zerde = try runZbenchParam(io, allocator, "json parse zerde", &parse_zerde, bench_case.scenario.parse_iterations),
+        .parse_std = try runZbenchParam(io, allocator, "json parse std", &parse_std, bench_case.scenario.parse_iterations),
+        .write_zerde = try runZbenchParam(io, allocator, "json write zerde", &write_zerde, bench_case.scenario.write_iterations),
+        .write_std = try runZbenchParam(io, allocator, "json write std", &write_std, bench_case.scenario.write_iterations),
+        .roundtrip_zerde = try runZbenchParam(io, allocator, "json roundtrip zerde", &roundtrip_zerde, bench_case.scenario.roundtrip_iterations),
+        .roundtrip_std = try runZbenchParam(io, allocator, "json roundtrip std", &roundtrip_std, bench_case.scenario.roundtrip_iterations),
     };
 }
 
@@ -876,6 +1074,172 @@ fn runTomlScenario(
     io: std.Io,
     allocator: Allocator,
 ) !TomlScenarioResult {
+    const WriteType = TomlPayload(endpoint_count, metric_count, event_count);
+
+    const TomlZerdeParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = zerde.parseSlice(zerde.toml, TomlParsePayload, self.arena.allocator(), self.input) catch @panic("zerde TOML parse failed");
+            consumeTomlParsed(value);
+        }
+    };
+
+    const ZigTomlParse = struct {
+        input: []const u8,
+        parser: zig_toml.Parser(TomlParsePayload),
+
+        fn init(parse_allocator: Allocator, input: []const u8) @This() {
+            return .{
+                .input = input,
+                .parser = zig_toml.Parser(TomlParsePayload).init(parse_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.parser.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            var result = self.parser.parseString(self.input) catch @panic("zig-toml parse failed");
+            consumeTomlParsed(result.value);
+            result.deinit();
+        }
+    };
+
+    const TomlZerdeSerialize = struct {
+        value: *const WriteType,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: *const WriteType) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.toml, &self.out.writer, self.value.*) catch @panic("zerde TOML serialize failed");
+        }
+    };
+
+    const ZigTomlSerialize = struct {
+        allocator: Allocator,
+        value: *const WriteType,
+        out: std.Io.Writer.Allocating,
+
+        fn init(write_allocator: Allocator, value: *const WriteType) @This() {
+            return .{
+                .allocator = write_allocator,
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zig_toml.serialize(self.allocator, self.value.*, &self.out.writer) catch @panic("zig-toml serialize failed");
+        }
+    };
+
+    const TomlZerdeRoundTrip = struct {
+        value: *const WriteType,
+        expected: TomlParsePayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: *const WriteType) !@This() {
+            var self = @This(){
+                .value = value,
+                .expected = makeTomlParseView(value.*),
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zerde.serialize(zerde.toml, &self.out.writer, self.value.*);
+            const check = try zerde.parseSlice(zerde.toml, TomlParsePayload, self.arena.allocator(), self.out.written());
+            try assertRoundTripEqual(TomlParsePayload, self.expected, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.toml, &self.out.writer, self.value.*) catch @panic("zerde TOML roundtrip serialize failed");
+            const parsed = zerde.parseSlice(zerde.toml, TomlParsePayload, self.arena.allocator(), self.out.written()) catch @panic("zerde TOML roundtrip parse failed");
+            consumeTomlParsed(parsed);
+        }
+    };
+
+    const ZigTomlRoundTrip = struct {
+        allocator: Allocator,
+        value: *const WriteType,
+        expected: TomlParsePayload,
+        parser: zig_toml.Parser(TomlParsePayload),
+        out: std.Io.Writer.Allocating,
+
+        fn init(roundtrip_allocator: Allocator, value: *const WriteType) !@This() {
+            var self = @This(){
+                .allocator = roundtrip_allocator,
+                .value = value,
+                .expected = makeTomlParseView(value.*),
+                .parser = zig_toml.Parser(TomlParsePayload).init(roundtrip_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zig_toml.serialize(self.allocator, self.value.*, &self.out.writer);
+            var check = try self.parser.parseString(self.out.written());
+            defer check.deinit();
+            try assertRoundTripEqual(TomlParsePayload, self.expected, check.value);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.parser.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zig_toml.serialize(self.allocator, self.value.*, &self.out.writer) catch @panic("zig-toml roundtrip serialize failed");
+            var parsed = self.parser.parseString(self.out.written()) catch @panic("zig-toml roundtrip parse failed");
+            consumeTomlParsed(parsed.value);
+            parsed.deinit();
+        }
+    };
+
     const value = try makeTomlPayload(endpoint_count, metric_count, event_count, allocator);
     defer freeTomlPayload(allocator, value);
 
@@ -888,34 +1252,29 @@ fn runTomlScenario(
     defer zig_toml_out.deinit();
     try zig_toml.serialize(allocator, value, &zig_toml_out.writer);
 
+    var parse_zerde = TomlZerdeParse.init(parse_input);
+    defer parse_zerde.deinit();
+    var parse_zig_toml = ZigTomlParse.init(allocator, parse_input);
+    defer parse_zig_toml.deinit();
+    var write_zerde = TomlZerdeSerialize.init(value);
+    defer write_zerde.deinit();
+    var write_zig_toml = ZigTomlSerialize.init(allocator, value);
+    defer write_zig_toml.deinit();
+    var roundtrip_zerde = try TomlZerdeRoundTrip.init(value);
+    defer roundtrip_zerde.deinit();
+    var roundtrip_zig_toml = try ZigTomlRoundTrip.init(allocator, value);
+    defer roundtrip_zig_toml.deinit();
+
     return .{
         .parse_bytes = parse_input.len,
         .zerde_write_bytes = zerde_out.written().len,
         .zig_toml_write_bytes = zig_toml_out.written().len,
-        .parse_zerde = .{
-            .iterations = parse_iterations,
-            .total_ns = try benchTomlZerdeParse(TomlParsePayload, io, parse_input, parse_iterations),
-        },
-        .parse_zig_toml = .{
-            .iterations = parse_iterations,
-            .total_ns = try benchZigTomlParse(TomlParsePayload, io, allocator, parse_input, parse_iterations),
-        },
-        .write_zerde = .{
-            .iterations = write_iterations,
-            .total_ns = try benchTomlZerdeSerialize(io, value, write_iterations),
-        },
-        .write_zig_toml = .{
-            .iterations = write_iterations,
-            .total_ns = try benchZigTomlSerialize(io, allocator, value, write_iterations),
-        },
-        .roundtrip_zerde = .{
-            .iterations = roundtrip_iterations,
-            .total_ns = try benchTomlZerdeRoundTrip(io, value, roundtrip_iterations),
-        },
-        .roundtrip_zig_toml = .{
-            .iterations = roundtrip_iterations,
-            .total_ns = try benchZigTomlRoundTrip(io, allocator, value, roundtrip_iterations),
-        },
+        .parse_zerde = try runZbenchParam(io, allocator, "toml parse zerde", &parse_zerde, parse_iterations),
+        .parse_zig_toml = try runZbenchParam(io, allocator, "toml parse zig-toml", &parse_zig_toml, parse_iterations),
+        .write_zerde = try runZbenchParam(io, allocator, "toml write zerde", &write_zerde, write_iterations),
+        .write_zig_toml = try runZbenchParam(io, allocator, "toml write zig-toml", &write_zig_toml, write_iterations),
+        .roundtrip_zerde = try runZbenchParam(io, allocator, "toml roundtrip zerde", &roundtrip_zerde, roundtrip_iterations),
+        .roundtrip_zig_toml = try runZbenchParam(io, allocator, "toml roundtrip zig-toml", &roundtrip_zig_toml, roundtrip_iterations),
     };
 }
 
@@ -1082,6 +1441,165 @@ pub fn runCborBench(io: std.Io, allocator: Allocator) !void {
 }
 
 fn runCborScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !CborScenarioResult {
+    const CborZerdeParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = zerde.parseSliceAliased(zerde.cbor, Payload, self.arena.allocator(), self.input) catch @panic("zerde CBOR parse failed");
+            consumePayload(value);
+        }
+    };
+
+    const ZborParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const item = zbor.DataItem.new(self.input) catch @panic("zbor item parse failed");
+            const value = zbor.parse(ZborPayload, item, zborParseOptions(self.arena.allocator())) catch @panic("zbor typed parse failed");
+            consumeStdPayload(value);
+        }
+    };
+
+    const CborZerdeSerialize = struct {
+        value: Payload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: Payload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.cbor, &self.out.writer, self.value) catch @panic("zerde CBOR serialize failed");
+        }
+    };
+
+    const ZborSerialize = struct {
+        value: ZborPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: ZborPayload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zbor.stringify(self.value, zborStringifyOptions(), &self.out.writer) catch @panic("zbor serialize failed");
+        }
+    };
+
+    const CborZerdeRoundTrip = struct {
+        value: Payload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: Payload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zerde.serialize(zerde.cbor, &self.out.writer, self.value);
+            const check = try zerde.parseSliceAliased(zerde.cbor, Payload, self.arena.allocator(), self.out.written());
+            try assertRoundTripEqual(Payload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.cbor, &self.out.writer, self.value) catch @panic("zerde CBOR roundtrip serialize failed");
+            const parsed = zerde.parseSliceAliased(zerde.cbor, Payload, self.arena.allocator(), self.out.written()) catch @panic("zerde CBOR roundtrip parse failed");
+            consumePayload(parsed);
+        }
+    };
+
+    const ZborRoundTrip = struct {
+        value: ZborPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: ZborPayload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zbor.stringify(self.value, zborStringifyOptions(), &self.out.writer);
+            const check_item = try zbor.DataItem.new(self.out.written());
+            const check = try zbor.parse(ZborPayload, check_item, zborParseOptions(self.arena.allocator()));
+            try assertRoundTripEqual(ZborPayload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zbor.stringify(self.value, zborStringifyOptions(), &self.out.writer) catch @panic("zbor roundtrip serialize failed");
+            const item = zbor.DataItem.new(self.out.written()) catch @panic("zbor roundtrip item failed");
+            const parsed = zbor.parse(ZborPayload, item, zborParseOptions(self.arena.allocator())) catch @panic("zbor roundtrip parse failed");
+            consumeStdPayload(parsed);
+        }
+    };
+
     const zerde_value = try makePayload(allocator, scenario);
     defer freePayload(allocator, zerde_value);
 
@@ -1097,34 +1615,29 @@ fn runCborScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !CborSc
     defer zbor_out.deinit();
     try zbor.stringify(zbor_value, zborStringifyOptions(), &zbor_out.writer);
 
+    var parse_zerde = CborZerdeParse.init(parse_input);
+    defer parse_zerde.deinit();
+    var parse_zbor = ZborParse.init(parse_input);
+    defer parse_zbor.deinit();
+    var write_zerde = CborZerdeSerialize.init(zerde_value);
+    defer write_zerde.deinit();
+    var write_zbor = ZborSerialize.init(zbor_value);
+    defer write_zbor.deinit();
+    var roundtrip_zerde = try CborZerdeRoundTrip.init(zerde_value);
+    defer roundtrip_zerde.deinit();
+    var roundtrip_zbor = try ZborRoundTrip.init(zbor_value);
+    defer roundtrip_zbor.deinit();
+
     return .{
         .parse_bytes = parse_input.len,
         .zerde_write_bytes = zerde_out.written().len,
         .zbor_write_bytes = zbor_out.written().len,
-        .parse_zerde = .{
-            .iterations = scenario.parse_iterations,
-            .total_ns = try benchCborZerdeParse(io, parse_input, scenario.parse_iterations),
-        },
-        .parse_zbor = .{
-            .iterations = scenario.parse_iterations,
-            .total_ns = try benchZborParse(io, parse_input, scenario.parse_iterations),
-        },
-        .write_zerde = .{
-            .iterations = scenario.write_iterations,
-            .total_ns = try benchCborZerdeSerialize(io, zerde_value, scenario.write_iterations),
-        },
-        .write_zbor = .{
-            .iterations = scenario.write_iterations,
-            .total_ns = try benchZborSerialize(io, zbor_value, scenario.write_iterations),
-        },
-        .roundtrip_zerde = .{
-            .iterations = scenario.roundtrip_iterations,
-            .total_ns = try benchCborZerdeRoundTrip(io, zerde_value, scenario.roundtrip_iterations),
-        },
-        .roundtrip_zbor = .{
-            .iterations = scenario.roundtrip_iterations,
-            .total_ns = try benchZborRoundTrip(io, zbor_value, scenario.roundtrip_iterations),
-        },
+        .parse_zerde = try runZbenchParam(io, allocator, "cbor parse zerde", &parse_zerde, scenario.parse_iterations),
+        .parse_zbor = try runZbenchParam(io, allocator, "cbor parse zbor", &parse_zbor, scenario.parse_iterations),
+        .write_zerde = try runZbenchParam(io, allocator, "cbor write zerde", &write_zerde, scenario.write_iterations),
+        .write_zbor = try runZbenchParam(io, allocator, "cbor write zbor", &write_zbor, scenario.write_iterations),
+        .roundtrip_zerde = try runZbenchParam(io, allocator, "cbor roundtrip zerde", &roundtrip_zerde, scenario.roundtrip_iterations),
+        .roundtrip_zbor = try runZbenchParam(io, allocator, "cbor roundtrip zbor", &roundtrip_zbor, scenario.roundtrip_iterations),
     };
 }
 
@@ -1292,6 +1805,188 @@ pub fn runYamlBench(io: std.Io, allocator: Allocator) !void {
 }
 
 fn runYamlScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !YamlScenarioResult {
+    const YamlZerdeParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = zerde.parseSliceAliased(zerde.yaml, YamlPayload, self.arena.allocator(), self.input) catch @panic("zerde YAML parse failed");
+            consumeYamlPayload(value);
+        }
+    };
+
+    const ZigYamlParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const loop_allocator = self.arena.allocator();
+            var yaml_doc: zig_yaml.Yaml = .{ .source = self.input };
+            yaml_doc.load(loop_allocator) catch @panic("zig-yaml load failed");
+            const value = yaml_doc.parse(loop_allocator, YamlPayload) catch @panic("zig-yaml parse failed");
+            consumeYamlPayload(value);
+            yaml_doc.deinit(loop_allocator);
+        }
+    };
+
+    const YamlZerdeSerialize = struct {
+        value: YamlPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: YamlPayload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zerde.serializeWith(zerde.yaml, &self.out.writer, self.value, .{
+                .omit_null_fields = true,
+            }, .{
+                .indent_width = 4,
+            }) catch @panic("zerde YAML serialize failed");
+        }
+    };
+
+    const ZigYamlSerialize = struct {
+        allocator: Allocator,
+        value: YamlPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(write_allocator: Allocator, value: YamlPayload) @This() {
+            return .{
+                .allocator = write_allocator,
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zig_yaml.stringify(self.allocator, self.value, &self.out.writer) catch @panic("zig-yaml serialize failed");
+        }
+    };
+
+    const YamlZerdeRoundTrip = struct {
+        value: YamlPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: YamlPayload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zerde.serializeWith(zerde.yaml, &self.out.writer, self.value, .{
+                .omit_null_fields = true,
+            }, .{
+                .indent_width = 4,
+            });
+            const check = try zerde.parseSliceAliased(zerde.yaml, YamlPayload, self.arena.allocator(), self.out.written());
+            try assertRoundTripEqual(YamlPayload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zerde.serializeWith(zerde.yaml, &self.out.writer, self.value, .{
+                .omit_null_fields = true,
+            }, .{
+                .indent_width = 4,
+            }) catch @panic("zerde YAML roundtrip serialize failed");
+            const parsed = zerde.parseSliceAliased(zerde.yaml, YamlPayload, self.arena.allocator(), self.out.written()) catch @panic("zerde YAML roundtrip parse failed");
+            consumeYamlPayload(parsed);
+        }
+    };
+
+    const ZigYamlRoundTrip = struct {
+        allocator: Allocator,
+        value: YamlPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(roundtrip_allocator: Allocator, value: YamlPayload) !@This() {
+            var self = @This(){
+                .allocator = roundtrip_allocator,
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zig_yaml.stringify(self.allocator, self.value, &self.out.writer);
+            var check_doc: zig_yaml.Yaml = .{ .source = self.out.written() };
+            try check_doc.load(self.arena.allocator());
+            const check = try check_doc.parse(self.arena.allocator(), YamlPayload);
+            try assertRoundTripEqual(YamlPayload, self.value, check);
+            check_doc.deinit(self.arena.allocator());
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zig_yaml.stringify(self.allocator, self.value, &self.out.writer) catch @panic("zig-yaml roundtrip serialize failed");
+            var yaml_doc: zig_yaml.Yaml = .{ .source = self.out.written() };
+            yaml_doc.load(self.arena.allocator()) catch @panic("zig-yaml roundtrip load failed");
+            const parsed = yaml_doc.parse(self.arena.allocator(), YamlPayload) catch @panic("zig-yaml roundtrip parse failed");
+            consumeYamlPayload(parsed);
+            yaml_doc.deinit(self.arena.allocator());
+        }
+    };
+
     const value = try makeYamlPayload(allocator, scenario);
     defer freeYamlPayload(allocator, value);
 
@@ -1308,34 +2003,29 @@ fn runYamlScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !YamlSc
     try zig_yaml.stringify(allocator, value, &zig_yaml_out.writer);
     const parse_input = zig_yaml_out.written();
 
+    var parse_zerde = YamlZerdeParse.init(parse_input);
+    defer parse_zerde.deinit();
+    var parse_zig_yaml = ZigYamlParse.init(parse_input);
+    defer parse_zig_yaml.deinit();
+    var write_zerde = YamlZerdeSerialize.init(value);
+    defer write_zerde.deinit();
+    var write_zig_yaml = ZigYamlSerialize.init(allocator, value);
+    defer write_zig_yaml.deinit();
+    var roundtrip_zerde = try YamlZerdeRoundTrip.init(value);
+    defer roundtrip_zerde.deinit();
+    var roundtrip_zig_yaml = try ZigYamlRoundTrip.init(allocator, value);
+    defer roundtrip_zig_yaml.deinit();
+
     return .{
         .parse_bytes = parse_input.len,
         .zerde_write_bytes = zerde_out.written().len,
         .zig_yaml_write_bytes = zig_yaml_out.written().len,
-        .parse_zerde = .{
-            .iterations = scenario.parse_iterations,
-            .total_ns = try benchYamlZerdeParse(io, parse_input, scenario.parse_iterations),
-        },
-        .parse_zig_yaml = .{
-            .iterations = scenario.parse_iterations,
-            .total_ns = try benchZigYamlParse(io, parse_input, scenario.parse_iterations),
-        },
-        .write_zerde = .{
-            .iterations = scenario.write_iterations,
-            .total_ns = try benchYamlZerdeSerialize(io, value, scenario.write_iterations),
-        },
-        .write_zig_yaml = .{
-            .iterations = scenario.write_iterations,
-            .total_ns = try benchZigYamlSerialize(io, allocator, value, scenario.write_iterations),
-        },
-        .roundtrip_zerde = .{
-            .iterations = scenario.roundtrip_iterations,
-            .total_ns = try benchYamlZerdeRoundTrip(io, value, scenario.roundtrip_iterations),
-        },
-        .roundtrip_zig_yaml = .{
-            .iterations = scenario.roundtrip_iterations,
-            .total_ns = try benchZigYamlRoundTrip(io, allocator, value, scenario.roundtrip_iterations),
-        },
+        .parse_zerde = try runZbenchParam(io, allocator, "yaml parse zerde", &parse_zerde, scenario.parse_iterations),
+        .parse_zig_yaml = try runZbenchParam(io, allocator, "yaml parse zig-yaml", &parse_zig_yaml, scenario.parse_iterations),
+        .write_zerde = try runZbenchParam(io, allocator, "yaml write zerde", &write_zerde, scenario.write_iterations),
+        .write_zig_yaml = try runZbenchParam(io, allocator, "yaml write zig-yaml", &write_zig_yaml, scenario.write_iterations),
+        .roundtrip_zerde = try runZbenchParam(io, allocator, "yaml roundtrip zerde", &roundtrip_zerde, scenario.roundtrip_iterations),
+        .roundtrip_zig_yaml = try runZbenchParam(io, allocator, "yaml roundtrip zig-yaml", &roundtrip_zig_yaml, scenario.roundtrip_iterations),
     };
 }
 
