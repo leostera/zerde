@@ -8,6 +8,7 @@ const std = @import("std");
 const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
 const toml_impl = @import("toml.zig");
+const yaml_impl = @import("yaml.zig");
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
 
@@ -17,6 +18,7 @@ pub const SerdeConfig = meta.SerdeConfig;
 pub const cbor = cbor_impl;
 pub const json = json_impl;
 pub const toml = toml_impl;
+pub const yaml = yaml_impl;
 
 /// Recursively frees values produced by the owning parse paths.
 pub fn free(allocator: std.mem.Allocator, value: anytype) void {
@@ -209,10 +211,47 @@ test "generic cbor entrypoint works" {
     try std.testing.expectEqualDeep(expected, decoded);
 }
 
+test "generic yaml entrypoint works" {
+    const Example = struct {
+        firstName: []const u8,
+        members: []const struct {
+            accountId: u64,
+        },
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    const input =
+        \\first_name: Ada
+        \\members:
+        \\  - account_id: 42
+        \\  - account_id: 99
+    ;
+
+    const decoded = try parseSliceWith(yaml, Example, std.testing.allocator, input, .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer typed.free(std.testing.allocator, decoded);
+
+    try std.testing.expectEqualStrings("Ada", decoded.firstName);
+    try std.testing.expectEqual(@as(usize, 2), decoded.members.len);
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try serializeWith(yaml, &out.writer, decoded, .{
+        .rename_all = .snake_case,
+    }, .{});
+
+    try std.testing.expectEqualStrings(input, out.written());
+}
+
 test {
     _ = @import("meta.zig");
     _ = @import("typed.zig");
     _ = @import("cbor.zig");
     _ = @import("json.zig");
     _ = @import("toml.zig");
+    _ = @import("yaml.zig");
 }

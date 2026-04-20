@@ -144,7 +144,10 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
                         const skip_field = meta.effectiveOmitNullFields(T, cfg) and @typeInfo(field.type) == .optional and field_value == null;
                         if (!skip_field) {
                             const emitted_name = comptime meta.effectiveFieldName(T, field.name, cfg);
-                            const emit_value = try serializer.beginStructField(T, emitted_name, field.type);
+                            const emit_value = if (@hasDecl(SerializerType, "beginStructFieldValue"))
+                                try serializer.beginStructFieldValue(T, emitted_name, field.type, field_value)
+                            else
+                                try serializer.beginStructField(T, emitted_name, field.type);
                             if (emit_value) {
                                 try serializeValue(serializer, field_value, cfg);
                             }
