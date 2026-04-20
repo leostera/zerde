@@ -11,27 +11,61 @@ This file is a running log of TOML benchmark results for `zerde` against [`sam70
 
 ## Workload
 
-Current harness, starting at `cd59eb1`, uses a serialize-only nested columnar payload with:
+Current harness, starting at `8ba2955`, uses a nested columnar payload on a shared TOML subset with:
 
 - top-level scalars, enums, optionals, and fixed arrays
 - a nested `metadata` table
 - a nested `endpoints` table with arrays of strings, enums, integers, floats, and bools
 - a nested `metrics` table with arrays of strings, enums, signed integers, unsigned integers, floats, and fixed string arrays
 - a nested `events` table with arrays of strings, enums, signed integers, unsigned integers, floats, bools, and fixed arrays
+- parse and write both measured against one canonical TOML document per scenario
 
 Why columnar instead of row-oriented arrays-of-tables:
 
 - `zerde` and `zig-toml` both serialize this shape cleanly and at large sizes
 - `zig-toml` does not support slice fields in serialization
 - the two libraries do not agree on the representation of pointer-to-array struct fields, so that shape is not a fair apples-to-apples benchmark
+- the payload avoids byte-slice columns because both serializers map `[]u8` as strings, which is not a good shared benchmark shape for numeric arrays
 
 Current scenarios:
 
-- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` write iterations
-- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` write iterations
-- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` write iterations
+- `small`: `4` endpoints, `6` metrics, `8` events, `1_000_000` parse iterations, `1_000_000` write iterations
+- `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations
+- `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations
 
-The current large case produces TOML outputs of about `68.78 MiB` for `zerde` and `70.50 MiB` for `zig-toml`.
+The current large case produces a canonical parse input of about `68.89 MiB`, with write outputs of about `68.89 MiB` for `zerde` and `70.60 MiB` for `zig-toml`.
+
+Runs before `8ba2955` used the older write-only harness, so the new parse numbers are not comparable to those entries.
+
+## 2026-04-20 - 8ba2955
+
+Changes since previous run:
+
+- added TOML parse benchmarks against `zig-toml`
+- switched the TOML benchmark to a shared parse+write workload
+- changed the `retries` column from a byte slice to integer counts so the canonical TOML stays valid for both libraries
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 1000000 | 8196.32 | 343.24 | 19225.35 | 146.33 | `zerde` 2.35x faster |
+| medium | 728,766 B | 1000 | 1807772.17 | 384.45 | 3276471.04 | 212.12 | `zerde` 1.81x faster |
+| large | 72,232,635 B | 100 | 174376910.83 | 395.04 | 322422231.67 | 213.65 | `zerde` 1.85x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 4025.18 | 698.93 | 6722.98 | 432.65 | `zerde` 1.67x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 937816.13 | 741.09 | 840051.33 | 848.10 | `zig-toml` 1.12x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 91210099.17 | 755.25 | 79092874.58 | 892.67 | `zig-toml` 1.15x faster |
+
+### Notes
+
+- `zerde` is ahead on TOML parse in all three scenarios on the shared subset benchmark.
+- `zerde` still wins TOML write on the small payload, while `zig-toml` keeps a medium and large write advantage.
+- Parse throughput is measured against one canonical TOML input per scenario so both libraries consume the same bytes.
 
 ## 2026-04-20 - cd59eb1
 
