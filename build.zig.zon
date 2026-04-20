@@ -8,6 +8,9 @@
             .url = "git+https://github.com/sam701/zig-toml#a73c9423d88ed413204b39638fab7e9bccdb83fd",
             .hash = "toml-0.3.0-bV14Be6EAQDr0fkyURz4jYFyTAMPcwlNN0FEPVjDnXTR",
         },
+        .zbor = .{
+            .path = "3rdparty/zbor",
+        },
     },
     .paths = .{
         ".githooks",

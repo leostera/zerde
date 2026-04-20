@@ -6,6 +6,7 @@
 const std = @import("std");
 const zerde = @import("zerde");
 const zig_toml = @import("zig_toml");
+const zbor = @import("zbor");
 
 const Allocator = std.mem.Allocator;
 
@@ -287,6 +288,8 @@ const StdPayload = struct {
     sample_windows: [3]u32,
 };
 
+const ZborPayload = StdPayload;
+
 const toml_notes = [_][]const u8{
     "steady state",
     "slow database branch",
@@ -471,9 +474,22 @@ const TomlScenarioResult = struct {
     roundtrip_zig_toml: BenchStats,
 };
 
+const CborScenarioResult = struct {
+    parse_bytes: usize,
+    zerde_write_bytes: usize,
+    zbor_write_bytes: usize,
+    parse_zerde: BenchStats,
+    parse_zbor: BenchStats,
+    write_zerde: BenchStats,
+    write_zbor: BenchStats,
+    roundtrip_zerde: BenchStats,
+    roundtrip_zbor: BenchStats,
+};
+
 pub fn runAll(io: std.Io, allocator: Allocator) !void {
     try runJsonBench(io, allocator);
     try runTomlBench(io, allocator);
+    try runCborBench(io, allocator);
 }
 
 pub fn runJsonBench(io: std.Io, allocator: Allocator) !void {
@@ -922,6 +938,230 @@ fn printTomlScenarioResult(comptime scenario: Scenario, result: TomlScenarioResu
         result.roundtrip_zig_toml.mibPerSec(result.zig_toml_write_bytes * 2),
     });
     std.debug.print("\n", .{});
+}
+
+pub fn runCborBench(io: std.Io, allocator: Allocator) !void {
+    std.debug.print("zerde CBOR benchmark vs zbor\n", .{});
+    std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
+    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("roundtrip: typed value -> bytes -> typed value, with one correctness check before timing\n", .{});
+    std.debug.print("note: parse is measured on one canonical CBOR document per scenario; zbor parse includes DataItem construction because it is part of the public typed path\n\n", .{});
+
+    for (scenarios) |scenario| {
+        const result = try runCborScenario(io, allocator, scenario);
+        printCborScenarioResult(scenario, result);
+    }
+
+    std.debug.print("\n", .{});
+}
+
+fn runCborScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !CborScenarioResult {
+    const zerde_value = try makePayload(allocator, scenario);
+    defer freePayload(allocator, zerde_value);
+
+    const zbor_value = try makeStdPayload(allocator, scenario);
+    defer freeStdPayload(allocator, zbor_value);
+
+    var zerde_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zerde_out.deinit();
+    try zerde.serialize(zerde.cbor, &zerde_out.writer, zerde_value);
+    const parse_input = zerde_out.written();
+
+    var zbor_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zbor_out.deinit();
+    try zbor.stringify(zbor_value, zborStringifyOptions(), &zbor_out.writer);
+
+    return .{
+        .parse_bytes = parse_input.len,
+        .zerde_write_bytes = zerde_out.written().len,
+        .zbor_write_bytes = zbor_out.written().len,
+        .parse_zerde = .{
+            .iterations = scenario.parse_iterations,
+            .total_ns = try benchCborZerdeParse(io, parse_input, scenario.parse_iterations),
+        },
+        .parse_zbor = .{
+            .iterations = scenario.parse_iterations,
+            .total_ns = try benchZborParse(io, parse_input, scenario.parse_iterations),
+        },
+        .write_zerde = .{
+            .iterations = scenario.write_iterations,
+            .total_ns = try benchCborZerdeSerialize(io, zerde_value, scenario.write_iterations),
+        },
+        .write_zbor = .{
+            .iterations = scenario.write_iterations,
+            .total_ns = try benchZborSerialize(io, zbor_value, scenario.write_iterations),
+        },
+        .roundtrip_zerde = .{
+            .iterations = scenario.roundtrip_iterations,
+            .total_ns = try benchCborZerdeRoundTrip(io, zerde_value, scenario.roundtrip_iterations),
+        },
+        .roundtrip_zbor = .{
+            .iterations = scenario.roundtrip_iterations,
+            .total_ns = try benchZborRoundTrip(io, zbor_value, scenario.roundtrip_iterations),
+        },
+    };
+}
+
+fn benchCborZerdeParse(io: std.Io, input: []const u8, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        const value = try zerde.parseSliceAliased(zerde.cbor, Payload, arena.allocator(), input);
+        consumePayload(value);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZborParse(io: std.Io, input: []const u8, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        const item = try zbor.DataItem.new(input);
+        const value = try zbor.parse(ZborPayload, item, zborParseOptions(arena.allocator()));
+        consumeStdPayload(value);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchCborZerdeSerialize(io: std.Io, value: Payload, iterations: usize) !u64 {
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zerde.serialize(zerde.cbor, &out.writer, value);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZborSerialize(io: std.Io, value: ZborPayload, iterations: usize) !u64 {
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        out.clearRetainingCapacity();
+        try zbor.stringify(value, zborStringifyOptions(), &out.writer);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchCborZerdeRoundTrip(io: std.Io, value: Payload, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try zerde.serialize(zerde.cbor, &out.writer, value);
+    const check = try zerde.parseSliceAliased(zerde.cbor, Payload, arena.allocator(), out.written());
+    try assertRoundTripEqual(Payload, value, check);
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try zerde.serialize(zerde.cbor, &out.writer, value);
+        const parsed = try zerde.parseSliceAliased(zerde.cbor, Payload, arena.allocator(), out.written());
+        consumePayload(parsed);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn benchZborRoundTrip(io: std.Io, value: ZborPayload, iterations: usize) !u64 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try zbor.stringify(value, zborStringifyOptions(), &out.writer);
+    const check_item = try zbor.DataItem.new(out.written());
+    const check = try zbor.parse(ZborPayload, check_item, zborParseOptions(arena.allocator()));
+    try assertRoundTripEqual(ZborPayload, value, check);
+    _ = arena.reset(.retain_capacity);
+
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
+        out.clearRetainingCapacity();
+        try zbor.stringify(value, zborStringifyOptions(), &out.writer);
+        const item = try zbor.DataItem.new(out.written());
+        const parsed = try zbor.parse(ZborPayload, item, zborParseOptions(arena.allocator()));
+        consumeStdPayload(parsed);
+    }
+    return @intCast(start.untilNow(io).raw.nanoseconds);
+}
+
+fn printCborScenarioResult(scenario: Scenario, result: CborScenarioResult) void {
+    std.debug.print("{s}\n", .{scenario.name});
+    std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
+    });
+    std.debug.print("  zerde write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_write_bytes,
+        bytesToMiB(result.zerde_write_bytes),
+    });
+    std.debug.print("  zbor write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zbor_write_bytes,
+        bytesToMiB(result.zbor_write_bytes),
+    });
+    std.debug.print("  endpoints / metrics / events: {d} / {d} / {d}\n", .{
+        scenario.endpoint_count,
+        scenario.metric_count,
+        scenario.event_count,
+    });
+    std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
+    std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  roundtrip iters: {d}\n", .{result.roundtrip_zerde.iterations});
+    std.debug.print("  parse  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zerde.nsPerOp(),
+        result.parse_zerde.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  parse   zbor: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zbor.nsPerOp(),
+        result.parse_zbor.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  write  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zerde.nsPerOp(),
+        result.write_zerde.mibPerSec(result.zerde_write_bytes),
+    });
+    std.debug.print("  write   zbor: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zbor.nsPerOp(),
+        result.write_zbor.mibPerSec(result.zbor_write_bytes),
+    });
+    std.debug.print("  roundtrip  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zerde.nsPerOp(),
+        result.roundtrip_zerde.mibPerSec(result.zerde_write_bytes * 2),
+    });
+    std.debug.print("  roundtrip   zbor: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zbor.nsPerOp(),
+        result.roundtrip_zbor.mibPerSec(result.zbor_write_bytes * 2),
+    });
+    std.debug.print("\n", .{});
+}
+
+fn zborParseOptions(allocator: Allocator) zbor.Options {
+    return .{
+        .allocator = allocator,
+        .slice_serialization_type = .TextString,
+        .ignore_unknown_fields = false,
+    };
+}
+
+fn zborStringifyOptions() zbor.Options {
+    return .{
+        .slice_serialization_type = .TextString,
+    };
 }
 
 fn bytesToMiB(bytes: usize) f64 {

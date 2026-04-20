@@ -5,9 +5,11 @@ This directory contains the benchmark harness and benchmark history for `zerde`.
 ## Layout
 
 - `bench/bench.zig`: benchmark entrypoint
+- `bench/cbor.zig`: CBOR benchmark entrypoint
 - `bench/json.zig`: JSON benchmark entrypoint
 - `bench/toml.zig`: TOML benchmark entrypoint
 - `bench/common.zig`: shared scenarios, payload builders, and benchmark loops
+- `bench/CBOR.md`: running CBOR benchmark history
 - `bench/JSON.md`: running JSON benchmark history
 - `bench/TOML.md`: running TOML benchmark history
 
@@ -31,6 +33,12 @@ Run TOML only:
 zig build bench-toml -Doptimize=ReleaseFast
 ```
 
+Run CBOR only:
+
+```sh
+zig build bench-cbor -Doptimize=ReleaseFast
+```
+
 Run the test suite before recording benchmark results:
 
 ```sh
@@ -41,6 +49,7 @@ zig build test
 
 - JSON compares `zerde` against Zig's `std.json`
 - TOML compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
+- CBOR compares `zerde` against `zbor`
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
 The current harness measures parse, write, and roundtrip (`typed -> bytes -> typed`) cost.
@@ -65,6 +74,9 @@ Current harness behavior follows that rule:
 - TOML parse compares `zerde.parseSlice(..., TomlParsePayload, ...)` against `zig_toml.Parser(TomlParsePayload).parseString(...)`
 - TOML write compares `zerde.serialize(...)` against `zig_toml.serialize(...)`
 - TOML roundtrip compares `zerde.serialize(...) + zerde.parseSlice(...)` against `zig_toml.serialize(...) + zig_toml.Parser(...).parseString(...)`
+- CBOR parse compares `zerde.parseSliceAliased(..., Payload, ...)` against `zbor.DataItem.new(...) + zbor.parse(ZborPayload, ...)`
+- CBOR write compares `zerde.serialize(...)` against `zbor.stringify(...)`
+- CBOR roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `zbor.stringify(...) + zbor.DataItem.new(...) + zbor.parse(...)`
 
 Roundtrip benchmarks also perform one deep equality check per scenario before timing begins.
 That keeps correctness in the harness without turning the timed region into a struct-comparison benchmark.
