@@ -1,90 +1,206 @@
-//! Shared JSON corpus schema and exact roundtrip assertions.
+//! Shared JSON corpus registry and exact roundtrip assertions.
+//!
+//! The corpus is feature-first: each fixture picks the smallest Zig type that
+//! expresses the JSON shape under test instead of routing every file through one
+//! large schema.
 
 const std = @import("std");
 const zerde = @import("zerde");
 
-pub const DispatchReport = struct {
-    convoyId: u64,
-    arcName: []const u8,
-    sea: Sea,
-    active: bool,
-    morale: f32,
-    alertness: f64,
-    intelDelta: i32,
-    notes: ?[]const u8,
-    callSign: [4]u8,
-    checkpoints: [3]u16,
-    flagship: Ship,
-    alliedCrews: []const Ship,
-    islands: []const IslandStop,
-    weatherWindows: []const WeatherWindow,
-};
-
-const Sea = enum {
-    east_blue,
-    paradise,
-    new_world,
-};
-
 const Role = enum {
     captain,
-    navigator,
-    swordsman,
     cook,
     doctor,
-    archaeologist,
-    shipwright,
-    musician,
+    navigator,
     helmsman,
-    sniper,
+};
+
+const EmptyObject = struct {};
+
+const NameOnly = struct {
+    name: []const u8,
+};
+
+const NameActive = struct {
+    name: []const u8,
+    active: bool,
+};
+
+const NumericFields = struct {
+    count: u8,
+    price: f64,
+    delta: i8,
+};
+
+const EmptyMembers = struct {
+    members: []const bool,
+};
+
+const EmptyMetadata = struct {
+    metadata: EmptyObject,
 };
 
 const Ship = struct {
     name: []const u8,
-    captain: []const u8,
-    crewCount: u16,
-    colaBarrels: ?u16,
-    officers: []const Officer,
+    crew: u8,
 };
 
-const Officer = struct {
+const NestedShip = struct {
+    ship: Ship,
+};
+
+const Fleet = struct {
+    ships: []const NameOnly,
+};
+
+const MaybeNote = struct {
+    note: ?[]const u8,
+};
+
+const NamedMaybeNote = struct {
     name: []const u8,
+    note: ?[]const u8,
+};
+
+const SnakeCaseSummary = struct {
+    captainName: []const u8,
+    crewTotal: u8,
+
+    pub const serde = .{
+        .rename_all = .snake_case,
+    };
+};
+
+const FieldRenameSummary = struct {
+    captain: []const u8,
+    helmsman: []const u8,
+
+    pub const serde = .{
+        .fields = .{
+            .captain = .{ .rename = "acting_captain" },
+            .helmsman = .{ .rename = "sea_driver" },
+        },
+    };
+};
+
+const RoleField = struct {
     role: Role,
-    bounty: u32,
-    dream: ?[]const u8,
-    haki: bool,
 };
 
-const IslandStop = struct {
+const FixedBytes = struct {
+    code: [4]u8,
+};
+
+const FixedSamples = struct {
+    samples: [3]u16,
+};
+
+const MixedScalars = struct {
+    name: []const u8,
+    active: bool,
+    count: u8,
+    ratio: f64,
+    note: ?[]const u8,
+};
+
+const EscapedFields = struct {
+    message: []const u8,
+    quote: []const u8,
+};
+
+const UnicodeFields = struct {
+    name: []const u8,
+    role: []const u8,
+};
+
+const LogEntry = struct {
     island: []const u8,
-    daysStayed: u8,
-    logPoseCharge: f32,
-    supplies: []const []const u8,
+    days: u8,
 };
 
-const WeatherWindow = struct {
-    label: []const u8,
-    waveHeightMeters: f64,
-    currentKnots: f32,
-    stormsExpected: bool,
+const DeepCrew = struct {
+    name: []const u8,
+    roles: []const Role,
+    active: bool,
 };
 
-pub fn expectRoundTripMatches(case_name: []const u8, input: []const u8) !void {
+const DeepMix = struct {
+    crew: DeepCrew,
+    log: []const LogEntry,
+    notes: ?[]const u8,
+    checkpoints: [3]u16,
+};
+
+pub fn expectRoundTripMatches(comptime case_name: []const u8, input: []const u8) !void {
+    if (comptime std.mem.eql(u8, case_name, "null.json")) return expectCase(?bool, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "true.json")) return expectCase(bool, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "false.json")) return expectCase(bool, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "zero.json")) return expectCase(i64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "positive_int.json")) return expectCase(u64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "negative_int.json")) return expectCase(i64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "big_uint.json")) return expectCase(u64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "fraction.json")) return expectCase(f64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "negative_fraction.json")) return expectCase(f64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "precise_fraction.json")) return expectCase(f64, case_name, input, .{});
+
+    if (comptime std.mem.eql(u8, case_name, "string_empty.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_ascii.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_quote.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_backslash.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_newline.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_tab.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_carriage_return.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_backspace.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_escaped_formfeed.json")) return expectCase([]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "string_unicode_utf8.json")) return expectCase([]const u8, case_name, input, .{});
+
+    if (comptime std.mem.eql(u8, case_name, "array_empty.json")) return expectCase([]const bool, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_bool.json")) return expectCase([]const bool, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_int.json")) return expectCase([]const i64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_negative_int.json")) return expectCase([]const i64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_float.json")) return expectCase([]const f64, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_string.json")) return expectCase([]const []const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_enum.json")) return expectCase([]const Role, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_nested_int.json")) return expectCase([3][2]u16, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_nested_string.json")) return expectCase([2][2][]const u8, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "array_object.json")) return expectCase([]const NameOnly, case_name, input, .{});
+
+    if (comptime std.mem.eql(u8, case_name, "object_empty.json")) return expectCase(EmptyObject, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_single_field.json")) return expectCase(NameOnly, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_two_fields.json")) return expectCase(NameActive, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_numeric_fields.json")) return expectCase(NumericFields, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_empty_array.json")) return expectCase(EmptyMembers, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_empty_object.json")) return expectCase(EmptyMetadata, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_nested.json")) return expectCase(NestedShip, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_nested_array.json")) return expectCase(Fleet, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_optional_null.json")) return expectCase(MaybeNote, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_optional_value.json")) return expectCase(MaybeNote, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_optional_omitted.json")) return expectCase(NamedMaybeNote, case_name, input, .{
+        .omit_null_fields = true,
+    });
+    if (comptime std.mem.eql(u8, case_name, "object_rename_all_snake_case.json")) return expectCase(SnakeCaseSummary, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_field_rename.json")) return expectCase(FieldRenameSummary, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_enum_field.json")) return expectCase(RoleField, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_fixed_bytes.json")) return expectCase(FixedBytes, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_fixed_int_array.json")) return expectCase(FixedSamples, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_mixed_scalars.json")) return expectCase(MixedScalars, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_escaped_fields.json")) return expectCase(EscapedFields, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_unicode_fields.json")) return expectCase(UnicodeFields, case_name, input, .{});
+    if (comptime std.mem.eql(u8, case_name, "object_deep_mix.json")) return expectCase(DeepMix, case_name, input, .{});
+
+    @compileError("unregistered JSON corpus case: " ++ case_name);
+}
+
+fn expectCase(comptime T: type, comptime case_name: []const u8, input: []const u8, comptime serde_cfg: anytype) !void {
     const allocator = std.testing.allocator;
 
-    const decoded = try zerde.parseSliceWith(zerde.json, DispatchReport, allocator, input, .{
-        .rename_all = .snake_case,
-        .deny_unknown_fields = true,
-    }, .{});
+    const decoded = try zerde.parseSliceWith(zerde.json, T, allocator, input, serde_cfg, .{});
     defer zerde.free(allocator, decoded);
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
 
-    try zerde.serializeWith(zerde.json, &out.writer, decoded, .{
-        .rename_all = .snake_case,
-        .deny_unknown_fields = true,
-    }, .{});
+    try zerde.serializeWith(zerde.json, &out.writer, decoded, serde_cfg, .{});
 
     if (!std.mem.eql(u8, input, out.written())) {
         printDiff(case_name, input, out.written());
