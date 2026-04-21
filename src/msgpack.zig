@@ -90,6 +90,14 @@ pub fn MsgpackSerializer(comptime Config: type) type {
             try self.emitInteger(@intFromEnum(value));
         }
 
+        pub fn serializeSequence(self: *Self, comptime Sequence: type, value: Sequence, comptime cfg: anytype) !bool {
+            _ = cfg;
+            if (!isInlineSequenceType(Sequence)) return false;
+
+            try writeInlineSequence(self, Sequence, value);
+            return true;
+        }
+
         pub fn beginStructSized(self: *Self, comptime T: type, field_count: usize) !void {
             _ = T;
             try writeMapHeader(self.writer, field_count);
@@ -116,7 +124,15 @@ pub fn MsgpackSerializer(comptime Config: type) type {
         pub fn beginStructField(self: *Self, comptime Parent: type, comptime name: []const u8, comptime FieldType: type) !bool {
             _ = Parent;
             _ = FieldType;
-            try self.emitString(name);
+            try self.writeFieldName(name);
+            return true;
+        }
+
+        pub fn beginStructFieldValue(self: *Self, comptime Parent: type, comptime name: []const u8, comptime FieldType: type, value: FieldType) !bool {
+            _ = Parent;
+            try self.writeFieldName(name);
+
+            if (try self.writeInlineValue(FieldType, value)) return false;
             return true;
         }
 
@@ -153,6 +169,64 @@ pub fn MsgpackSerializer(comptime Config: type) type {
             _ = self;
             _ = Child;
             _ = len;
+        }
+
+        fn writeFieldName(self: *Self, comptime name: []const u8) !void {
+            const encoded = comptime encodeFieldName(name);
+            try self.writer.writeAll(&encoded);
+        }
+
+        fn writeInlineValue(self: *Self, comptime T: type, value: T) !bool {
+            switch (@typeInfo(T)) {
+                .bool => {
+                    try self.emitBool(value);
+                    return true;
+                },
+                .int, .comptime_int => {
+                    try self.emitInteger(value);
+                    return true;
+                },
+                .float, .comptime_float => {
+                    try self.emitFloat(value);
+                    return true;
+                },
+                .@"enum" => {
+                    try self.emitEnum(T, value);
+                    return true;
+                },
+                .optional => {
+                    if (value) |child| return try self.writeInlineValue(@TypeOf(child), child);
+                    try self.emitNull();
+                    return true;
+                },
+                .array => |info| {
+                    if (info.child == u8) {
+                        try self.emitBytes(value[0..]);
+                        return true;
+                    }
+                    if (isInlineSequenceType(T)) {
+                        try writeInlineSequence(self, T, value);
+                        return true;
+                    }
+                    return false;
+                },
+                .pointer => |info| switch (info.size) {
+                    .slice => {
+                        if (info.child == u8) {
+                            try self.emitString(value);
+                            return true;
+                        }
+                        if (isInlineSequenceType(T)) {
+                            try writeInlineSequence(self, T, value);
+                            return true;
+                        }
+                        return false;
+                    },
+                    .one => return try self.writeInlineValue(info.child, value.*),
+                    else => return false,
+                },
+                else => return false,
+            }
         }
     };
 }
@@ -232,11 +306,41 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
         pub fn readNumber(self: *Self) !Number {
             const tag = try self.readByte();
             return switch (classify(tag)) {
-                .integer => try self.decodeNumber(tag),
-                .float => switch (tag) {
-                    0xca => .{ .float = @as(f64, @floatCast(@as(f32, @bitCast(try self.readBig(u32))))) },
-                    0xcb => .{ .float = @as(f64, @bitCast(try self.readBig(u64))) },
-                    else => error.UnexpectedType,
+                .integer => .{ .integer = try self.decodeInteger(tag) },
+                .float => .{ .float = try self.decodeFloat(tag) },
+                else => error.UnexpectedType,
+            };
+        }
+
+        pub fn readInt(self: *Self, comptime T: type) !T {
+            const tag = try self.readByte();
+            return switch (classify(tag)) {
+                .integer => castIntValue(T, try self.decodeInteger(tag)),
+                .float => castFloatToInt(T, try self.decodeFloat(tag)),
+                else => error.UnexpectedType,
+            };
+        }
+
+        pub fn readFloat(self: *Self, comptime T: type) !T {
+            const tag = try self.readByte();
+            return switch (classify(tag)) {
+                .integer => @as(T, @floatFromInt(try self.decodeInteger(tag))),
+                .float => @as(T, @floatCast(try self.decodeFloat(tag))),
+                else => error.UnexpectedType,
+            };
+        }
+
+        pub fn readEnumTag(self: *Self, comptime T: type) !T {
+            const tag_type = @typeInfo(T).@"enum".tag_type;
+            const tag = try self.readByte();
+            return switch (classify(tag)) {
+                .integer => blk: {
+                    const raw = try castIntValue(tag_type, try self.decodeInteger(tag));
+                    break :blk std.enums.fromInt(T, raw) orelse error.InvalidEnumTag;
+                },
+                .string => blk: {
+                    const raw = try self.readBorrowedStringTagged(tag);
+                    break :blk std.meta.stringToEnum(T, raw) orelse error.InvalidEnumTag;
                 },
                 else => error.UnexpectedType,
             };
@@ -295,18 +399,26 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             try self.skipOne();
         }
 
-        fn decodeNumber(self: *Self, tag: u8) !Number {
+        fn decodeInteger(self: *Self, tag: u8) !i128 {
             return switch (tag) {
-                0x00...0x7f => .{ .integer = @as(i128, tag) },
-                0xe0...0xff => .{ .integer = @as(i128, @as(i8, @bitCast(tag))) },
-                0xcc => .{ .integer = @as(i128, try self.readByte()) },
-                0xcd => .{ .integer = @as(i128, try self.readBig(u16)) },
-                0xce => .{ .integer = @as(i128, try self.readBig(u32)) },
-                0xcf => .{ .integer = @as(i128, @intCast(try self.readBig(u64))) },
-                0xd0 => .{ .integer = @as(i128, @as(i8, @bitCast(try self.readByte()))) },
-                0xd1 => .{ .integer = @as(i128, @as(i16, @bitCast(try self.readBig(u16)))) },
-                0xd2 => .{ .integer = @as(i128, @as(i32, @bitCast(try self.readBig(u32)))) },
-                0xd3 => .{ .integer = @as(i128, @as(i64, @bitCast(try self.readBig(u64)))) },
+                0x00...0x7f => @as(i128, tag),
+                0xe0...0xff => @as(i128, @as(i8, @bitCast(tag))),
+                0xcc => @as(i128, try self.readByte()),
+                0xcd => @as(i128, try self.readBig(u16)),
+                0xce => @as(i128, try self.readBig(u32)),
+                0xcf => @as(i128, @intCast(try self.readBig(u64))),
+                0xd0 => @as(i128, @as(i8, @bitCast(try self.readByte()))),
+                0xd1 => @as(i128, @as(i16, @bitCast(try self.readBig(u16)))),
+                0xd2 => @as(i128, @as(i32, @bitCast(try self.readBig(u32)))),
+                0xd3 => @as(i128, @as(i64, @bitCast(try self.readBig(u64)))),
+                else => error.UnexpectedType,
+            };
+        }
+
+        fn decodeFloat(self: *Self, tag: u8) !f64 {
+            return switch (tag) {
+                0xca => @as(f64, @floatCast(@as(f32, @bitCast(try self.readBig(u32))))),
+                0xcb => @as(f64, @bitCast(try self.readBig(u64))),
                 else => error.UnexpectedType,
             };
         }
@@ -329,6 +441,14 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             };
         }
 
+        fn readBorrowedStringTagged(self: *Self, tag: u8) ![]const u8 {
+            const len = try decodeRawLen(self, tag, .string);
+            if (self.input.len - self.index < len) return error.UnexpectedEndOfInput;
+            const raw = self.input[self.index .. self.index + len];
+            self.index += len;
+            return raw;
+        }
+
         fn readRawLenFor(self: *Self, expected: HeaderClass) !usize {
             const tag = try self.readByte();
             const actual = classify(tag);
@@ -347,12 +467,8 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             const tag = try self.readByte();
             switch (classify(tag)) {
                 .nil, .boolean => {},
-                .integer => _ = try self.decodeNumber(tag),
-                .float => switch (tag) {
-                    0xca => _ = try self.readBig(u32),
-                    0xcb => _ = try self.readBig(u64),
-                    else => return error.UnexpectedToken,
-                },
+                .integer => _ = try self.decodeInteger(tag),
+                .float => _ = try self.decodeFloat(tag),
                 .string => {
                     const len = try decodeRawLen(self, tag, .string);
                     if (self.input.len - self.index < len) return error.UnexpectedEndOfInput;
@@ -702,11 +818,99 @@ fn writeMapHeader(writer: *std.Io.Writer, len: usize) !void {
 
 fn writeBigEndian(writer: *std.Io.Writer, value: anytype) !void {
     var buffer: [@sizeOf(@TypeOf(value))]u8 = undefined;
-    inline for (0..buffer.len) |index| {
-        const shift = (buffer.len - 1 - index) * 8;
-        buffer[index] = @as(u8, @truncate(value >> shift));
-    }
+    std.mem.writeInt(@TypeOf(value), &buffer, value, .big);
     try writer.writeAll(&buffer);
+}
+
+fn castIntValue(comptime T: type, raw: i128) !T {
+    return switch (@typeInfo(T)) {
+        .comptime_int => @as(T, std.math.cast(i64, raw) orelse return error.IntegerOverflow),
+        .int => std.math.cast(T, raw) orelse error.IntegerOverflow,
+        else => error.UnsupportedType,
+    };
+}
+
+fn castFloatToInt(comptime T: type, raw: f64) !T {
+    const rounded = @round(raw);
+    if (rounded != raw) return error.UnexpectedType;
+    return castIntValue(T, @as(i128, @intFromFloat(rounded)));
+}
+
+fn encodeFieldName(comptime name: []const u8) [fieldNameEncodedLen(name)]u8 {
+    var buffer: [fieldNameEncodedLen(name)]u8 = undefined;
+    const header_len = fieldHeaderLen(name.len);
+
+    switch (header_len) {
+        1 => buffer[0] = 0xa0 | @as(u8, @intCast(name.len)),
+        2 => {
+            buffer[0] = 0xd9;
+            buffer[1] = @as(u8, @intCast(name.len));
+        },
+        3 => {
+            buffer[0] = 0xda;
+            std.mem.writeInt(u16, buffer[1..3], @as(u16, @intCast(name.len)), .big);
+        },
+        5 => {
+            buffer[0] = 0xdb;
+            std.mem.writeInt(u32, buffer[1..5], @as(u32, @intCast(name.len)), .big);
+        },
+        else => unreachable,
+    }
+
+    @memcpy(buffer[header_len..], name);
+    return buffer;
+}
+
+fn fieldHeaderLen(len: usize) comptime_int {
+    return switch (len) {
+        0...31 => 1,
+        32...0xff => 2,
+        0x0100...0xffff => 3,
+        else => 5,
+    };
+}
+
+fn fieldNameEncodedLen(comptime name: []const u8) comptime_int {
+    return fieldHeaderLen(name.len) + name.len;
+}
+
+fn isInlineSequenceType(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.child != u8 and isInlineSequenceElementType(info.child),
+        .pointer => |info| switch (info.size) {
+            .slice => info.child != u8 and isInlineSequenceElementType(info.child),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn isInlineSequenceElementType(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => true,
+        .optional => |info| isInlineSequenceElementType(info.child),
+        .array => |info| info.child == u8 or isInlineSequenceType(T),
+        .pointer => |info| switch (info.size) {
+            .slice => info.child == u8 or isInlineSequenceType(T),
+            .one => isInlineSequenceElementType(info.child),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn writeInlineSequence(ser: anytype, comptime Sequence: type, value: Sequence) !void {
+    const len = switch (@typeInfo(Sequence)) {
+        .array => value.len,
+        .pointer => value.len,
+        else => @compileError("unsupported MessagePack sequence type: " ++ @typeName(Sequence)),
+    };
+
+    try writeArrayHeader(ser.writer, len);
+    for (value) |item| {
+        const written = try ser.writeInlineValue(@TypeOf(item), item);
+        if (!written) return error.UnsupportedType;
+    }
 }
 
 fn effectiveMaxInputBytes(comptime cfg: anytype) usize {

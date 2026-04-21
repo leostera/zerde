@@ -399,15 +399,13 @@ fn deserializeStruct(
 
         var matched = false;
 
-        // This is the generic field matcher: reflect over the struct and compare against
-        // the effective wire name after rename rules have been applied.
         inline for (info.fields, 0..) |struct_field, i| {
             if (struct_field.is_comptime) {
                 @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ struct_field.name);
             }
 
             const expected_name = meta.effectiveFieldName(T, struct_field.name, cfg);
-            if (std.mem.eql(u8, field_name.bytes, expected_name)) {
+            if (fieldNameMatches(field_name.bytes, expected_name)) {
                 if (seen[i]) return error.DuplicateField;
                 @field(result, struct_field.name) = try deserializeValue(struct_field.type, allocator, deserializer, cfg);
                 seen[i] = true;
@@ -437,6 +435,14 @@ fn deserializeStruct(
     }
 
     return result;
+}
+
+fn fieldNameMatches(actual: []const u8, expected: []const u8) bool {
+    if (actual.len != expected.len) return false;
+    if (actual.len == 0) return true;
+    if (actual[0] != expected[0]) return false;
+    if (actual[actual.len - 1] != expected[expected.len - 1]) return false;
+    return std.mem.eql(u8, actual, expected);
 }
 
 fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
