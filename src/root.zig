@@ -14,6 +14,7 @@ const toml_impl = @import("toml.zig");
 const value_impl = @import("value.zig");
 const wasm_impl = @import("wasm.zig");
 const yaml_impl = @import("yaml.zig");
+const zon_impl = @import("zon.zig");
 const diagnostic_impl = @import("diagnostic.zig");
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
@@ -33,6 +34,7 @@ pub const toml = toml_impl;
 pub const value = value_impl;
 pub const wasm = wasm_impl;
 pub const yaml = yaml_impl;
+pub const zon = zon_impl;
 pub const Value = value_impl.Value;
 
 /// Arena-backed parsed value that can be released in one call.

@@ -365,6 +365,33 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.addImport("bson_tests", bson_tests_mod);
 
+    const zon_corpus_support_mod = b.createModule(.{
+        .root_source_file = b.path("tests/zon_corpus_support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "corpus_support", .module = corpus_support_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
+        },
+    });
+    const zon_corpus_generated_mod = b.createModule(.{
+        .root_source_file = generateCorpusTests(b, "zon", ".zon", "zon_corpus_support"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zon_corpus_support", .module = zon_corpus_support_mod },
+        },
+    });
+    const zon_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/zon_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zon_corpus_generated", .module = zon_corpus_generated_mod },
+        },
+    });
+    tests.root_module.addImport("zon_tests", zon_tests_mod);
+
     const run_tests = b.addRunArtifact(tests);
 
     const test_step = b.step("test", "Run zerde tests");
@@ -379,6 +406,7 @@ pub fn build(b: *std.Build) void {
         .{ "bson-roundtrip", "examples/bson_roundtrip.zig" },
         .{ "msgpack-roundtrip", "examples/msgpack_roundtrip.zig" },
         .{ "bin-roundtrip", "examples/bin_roundtrip.zig" },
+        .{ "zon-roundtrip", "examples/zon_roundtrip.zig" },
     }) |example| {
         const artifact = addNativeExample(b, example[0], example[1], target, optimize, zerde_mod);
         const install = b.addInstallArtifact(artifact, .{});
@@ -390,6 +418,7 @@ pub fn build(b: *std.Build) void {
         .{ "wasm-json-bridge", "examples/wasm_json_bridge.zig" },
         .{ "wasm-yaml-bridge", "examples/wasm_yaml_bridge.zig" },
         .{ "wasm-msgpack-bridge", "examples/wasm_msgpack_bridge.zig" },
+        .{ "wasm-zon-bridge", "examples/wasm_zon_bridge.zig" },
     }) |example| {
         const artifact = addWasmExample(b, example[0], example[1], optimize, zerde_mod);
         const install = b.addInstallArtifact(artifact, .{});
@@ -452,7 +481,10 @@ pub fn build(b: *std.Build) void {
     const run_bench_wasm = b.addRunArtifact(bench_exe);
     run_bench_wasm.addArg("wasm");
 
-    const bench_step = b.step("bench", "Run binary, JSON, TOML, CBOR, BSON, MessagePack, YAML, and WASM benchmarks");
+    const run_bench_zon = b.addRunArtifact(bench_exe);
+    run_bench_zon.addArg("zon");
+
+    const bench_step = b.step("bench", "Run binary, JSON, TOML, ZON, CBOR, BSON, MessagePack, YAML, and WASM benchmarks");
     bench_step.dependOn(&run_bench.step);
 
     const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
@@ -475,6 +507,9 @@ pub fn build(b: *std.Build) void {
 
     const bench_yaml_step = b.step("bench-yaml", "Run YAML benchmark against zig-yaml");
     bench_yaml_step.dependOn(&run_bench_yaml.step);
+
+    const bench_zon_step = b.step("bench-zon", "Run ZON benchmark against std.zon");
+    bench_zon_step.dependOn(&run_bench_zon.step);
 
     const bench_wasm_step = b.step("bench-wasm", "Run WASM helper benchmark against the direct binary path");
     bench_wasm_step.dependOn(&run_bench_wasm.step);

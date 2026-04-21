@@ -830,6 +830,18 @@ const YamlScenarioResult = struct {
     roundtrip_zig_yaml: BenchStats,
 };
 
+const ZonScenarioResult = struct {
+    parse_bytes: usize,
+    zerde_write_bytes: usize,
+    std_zon_write_bytes: usize,
+    parse_zerde: BenchStats,
+    parse_std_zon: BenchStats,
+    write_zerde: BenchStats,
+    write_std_zon: BenchStats,
+    roundtrip_zerde: BenchStats,
+    roundtrip_std_zon: BenchStats,
+};
+
 pub fn runAll(io: std.Io, allocator: Allocator) !void {
     try runJsonBench(io, allocator);
     try runTomlBench(io, allocator);
@@ -837,6 +849,7 @@ pub fn runAll(io: std.Io, allocator: Allocator) !void {
     try runBsonBench(io, allocator);
     try runMsgpackBench(io, allocator);
     try runYamlBench(io, allocator);
+    try runZonBench(io, allocator);
 }
 
 pub fn runJsonBench(io: std.Io, allocator: Allocator) !void {
@@ -1218,6 +1231,306 @@ fn printScenarioResult(scenario: Scenario, result: ScenarioResult) void {
     std.debug.print("  roundtrip std.json: {d:.2} ns/op, {d:.2} MiB/s\n", .{
         result.roundtrip_std.nsPerOp(),
         result.roundtrip_std.mibPerSec(result.std_write_bytes * 2),
+    });
+    std.debug.print("\n", .{});
+}
+
+pub fn runZonBench(io: std.Io, allocator: Allocator) !void {
+    std.debug.print("zerde ZON benchmark vs std.zon\n", .{});
+    std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
+    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("roundtrip: typed value -> bytes -> typed value, with one correctness check before timing\n", .{});
+    std.debug.print("note: parse uses each library's own canonical ZON output because the compared types do not share the same field renames\n\n", .{});
+
+    for (scenarios) |scenario| {
+        var bench_case = try buildZonCase(allocator, scenario);
+        defer bench_case.deinit(allocator);
+
+        const result = try runZonScenario(io, allocator, &bench_case);
+        printZonScenarioResult(bench_case.scenario, result);
+    }
+
+    std.debug.print("\n", .{});
+}
+
+const ZonBenchCase = struct {
+    scenario: Scenario,
+    zerde_value: Payload,
+    std_value: StdPayload,
+    zon_out: std.Io.Writer.Allocating,
+    std_zon_out: std.Io.Writer.Allocating,
+
+    fn zon(self: *ZonBenchCase) []const u8 {
+        return self.zon_out.written();
+    }
+
+    fn stdZon(self: *ZonBenchCase) []const u8 {
+        return self.std_zon_out.written();
+    }
+
+    fn deinit(self: *ZonBenchCase, allocator: Allocator) void {
+        self.std_zon_out.deinit();
+        self.zon_out.deinit();
+        freePayload(allocator, self.zerde_value);
+        freeStdPayload(allocator, self.std_value);
+    }
+};
+
+fn buildZonCase(allocator: Allocator, scenario: Scenario) !ZonBenchCase {
+    const zerde_value = try makePayload(allocator, scenario);
+    errdefer freePayload(allocator, zerde_value);
+
+    const std_value = try makeStdPayload(allocator, scenario);
+    errdefer freeStdPayload(allocator, std_value);
+
+    var zon_out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer zon_out.deinit();
+    try zerde.serialize(zerde.zon, &zon_out.writer, zerde_value);
+
+    var std_zon_out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer std_zon_out.deinit();
+    try std.zon.stringify.serialize(std_value, .{ .whitespace = false }, &std_zon_out.writer);
+
+    return .{
+        .scenario = scenario,
+        .zerde_value = zerde_value,
+        .std_value = std_value,
+        .zon_out = zon_out,
+        .std_zon_out = std_zon_out,
+    };
+}
+
+fn runZonScenario(io: std.Io, allocator: Allocator, bench_case: *ZonBenchCase) !ZonScenarioResult {
+    const ZonZerdeParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = zerde.parseSlice(zerde.zon, Payload, self.arena.allocator(), self.input) catch @panic("zerde ZON parse failed");
+            consumePayload(value);
+        }
+    };
+
+    const ZonStdParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const source = self.arena.allocator().dupeZ(u8, self.input) catch @panic("std.zon parse input allocation failed");
+            const value = std.zon.parse.fromSliceAlloc(StdPayload, self.arena.allocator(), source, null, .{}) catch @panic("std.zon parse failed");
+            consumeStdPayload(value);
+        }
+    };
+
+    const ZonZerdeSerialize = struct {
+        value: Payload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: Payload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.zon, &self.out.writer, self.value) catch @panic("zerde ZON serialize failed");
+        }
+    };
+
+    const ZonStdSerialize = struct {
+        value: StdPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: StdPayload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            std.zon.stringify.serialize(self.value, .{ .whitespace = false }, &self.out.writer) catch @panic("std.zon serialize failed");
+        }
+    };
+
+    const ZonZerdeRoundTrip = struct {
+        value: Payload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: Payload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zerde.serialize(zerde.zon, &self.out.writer, self.value);
+            const check = try zerde.parseSlice(zerde.zon, Payload, self.arena.allocator(), self.out.written());
+            try assertRoundTripEqual(Payload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.zon, &self.out.writer, self.value) catch @panic("zerde ZON roundtrip serialize failed");
+            const parsed = zerde.parseSlice(zerde.zon, Payload, self.arena.allocator(), self.out.written()) catch @panic("zerde ZON roundtrip parse failed");
+            consumePayload(parsed);
+        }
+    };
+
+    const ZonStdRoundTrip = struct {
+        value: StdPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: StdPayload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try std.zon.stringify.serialize(self.value, .{ .whitespace = false }, &self.out.writer);
+            const source = try self.arena.allocator().dupeZ(u8, self.out.written());
+            const check = try std.zon.parse.fromSliceAlloc(StdPayload, self.arena.allocator(), source, null, .{});
+            try assertRoundTripEqual(StdPayload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            std.zon.stringify.serialize(self.value, .{ .whitespace = false }, &self.out.writer) catch @panic("std.zon roundtrip serialize failed");
+            const source = self.arena.allocator().dupeZ(u8, self.out.written()) catch @panic("std.zon roundtrip input allocation failed");
+            const parsed = std.zon.parse.fromSliceAlloc(StdPayload, self.arena.allocator(), source, null, .{}) catch @panic("std.zon roundtrip parse failed");
+            consumeStdPayload(parsed);
+        }
+    };
+
+    var parse_zerde = ZonZerdeParse.init(bench_case.zon());
+    defer parse_zerde.deinit();
+    var parse_std_zon = ZonStdParse.init(bench_case.stdZon());
+    defer parse_std_zon.deinit();
+    var write_zerde = ZonZerdeSerialize.init(bench_case.zerde_value);
+    defer write_zerde.deinit();
+    var write_std_zon = ZonStdSerialize.init(bench_case.std_value);
+    defer write_std_zon.deinit();
+    var roundtrip_zerde = try ZonZerdeRoundTrip.init(bench_case.zerde_value);
+    defer roundtrip_zerde.deinit();
+    var roundtrip_std_zon = try ZonStdRoundTrip.init(bench_case.std_value);
+    defer roundtrip_std_zon.deinit();
+
+    return .{
+        .parse_bytes = bench_case.zon().len,
+        .zerde_write_bytes = bench_case.zon().len,
+        .std_zon_write_bytes = bench_case.stdZon().len,
+        .parse_zerde = try runZbenchParam(io, allocator, "zon parse zerde", &parse_zerde, bench_case.scenario.parse_iterations),
+        .parse_std_zon = try runZbenchParam(io, allocator, "zon parse std.zon", &parse_std_zon, bench_case.scenario.parse_iterations),
+        .write_zerde = try runZbenchParam(io, allocator, "zon write zerde", &write_zerde, bench_case.scenario.write_iterations),
+        .write_std_zon = try runZbenchParam(io, allocator, "zon write std.zon", &write_std_zon, bench_case.scenario.write_iterations),
+        .roundtrip_zerde = try runZbenchParam(io, allocator, "zon roundtrip zerde", &roundtrip_zerde, bench_case.scenario.roundtrip_iterations),
+        .roundtrip_std_zon = try runZbenchParam(io, allocator, "zon roundtrip std.zon", &roundtrip_std_zon, bench_case.scenario.roundtrip_iterations),
+    };
+}
+
+fn printZonScenarioResult(scenario: Scenario, result: ZonScenarioResult) void {
+    std.debug.print("{s}\n", .{scenario.name});
+    std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
+    });
+    std.debug.print("  zerde write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_write_bytes,
+        bytesToMiB(result.zerde_write_bytes),
+    });
+    std.debug.print("  std.zon write bytes: {d} ({d:.2} MiB)\n", .{
+        result.std_zon_write_bytes,
+        bytesToMiB(result.std_zon_write_bytes),
+    });
+    std.debug.print("  endpoints / metrics / events: {d} / {d} / {d}\n", .{
+        scenario.endpoint_count,
+        scenario.metric_count,
+        scenario.event_count,
+    });
+    std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
+    std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  roundtrip iters: {d}\n", .{result.roundtrip_zerde.iterations});
+    std.debug.print("  parse  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zerde.nsPerOp(),
+        result.parse_zerde.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  parse std.zon: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_std_zon.nsPerOp(),
+        result.parse_std_zon.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  write  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zerde.nsPerOp(),
+        result.write_zerde.mibPerSec(result.zerde_write_bytes),
+    });
+    std.debug.print("  write std.zon: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_std_zon.nsPerOp(),
+        result.write_std_zon.mibPerSec(result.std_zon_write_bytes),
+    });
+    std.debug.print("  roundtrip  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zerde.nsPerOp(),
+        result.roundtrip_zerde.mibPerSec(result.zerde_write_bytes * 2),
+    });
+    std.debug.print("  roundtrip std.zon: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_std_zon.nsPerOp(),
+        result.roundtrip_std_zon.mibPerSec(result.std_zon_write_bytes * 2),
     });
     std.debug.print("\n", .{});
 }

@@ -13,6 +13,7 @@ const json_format = @import("json.zig");
 const msgpack_format = @import("msgpack.zig");
 const toml_format = @import("toml.zig");
 const yaml_format = @import("yaml.zig");
+const zon_format = @import("zon.zig");
 
 const Number = typed.Number;
 const StringToken = typed.StringToken;
@@ -179,7 +180,8 @@ pub fn serialize(comptime Format: type, writer: *std.Io.Writer, value: Value) !v
     if (Format == cbor_format) return writeCbor(writer, value);
     if (Format == bson_format) return writeBson(writer, value);
     if (Format == msgpack_format) return writeMsgpack(writer, value);
-    @compileError("zerde.Value serialization is only supported for JSON, TOML, YAML, CBOR, BSON, and MessagePack");
+    if (Format == zon_format) return writeZon(writer, value);
+    @compileError("zerde.Value serialization is only supported for JSON, TOML, YAML, ZON, CBOR, BSON, and MessagePack");
 }
 
 fn parseFromDeserializer(allocator: Allocator, deserializer: anytype) anyerror!Value {
@@ -462,6 +464,53 @@ fn writeMsgpack(writer: *std.Io.Writer, value: Value) !void {
                 try writeMsgpackStringLike(writer, .string, entry.key.bytes);
                 try writeMsgpack(writer, entry.value);
             }
+        },
+    }
+}
+
+fn writeZon(writer: *std.Io.Writer, value: Value) !void {
+    var serializer: std.zon.Serializer = .{
+        .writer = writer,
+        .options = .{ .whitespace = false },
+    };
+    try writeZonValue(&serializer, value);
+}
+
+fn writeZonValue(serializer: *std.zon.Serializer, value: Value) !void {
+    switch (value) {
+        .null => try serializer.writer.writeAll("null"),
+        .bool => |bool_value| try serializer.writer.print("{}", .{bool_value}),
+        .integer => |integer_value| try serializer.int(integer_value),
+        .float => |float_value| try serializer.float(float_value),
+        .string => |token| try serializer.string(token.bytes),
+        .bytes => |token| {
+            var tuple = try serializer.beginTuple(.{
+                .whitespace_style = .{ .fields = token.bytes.len },
+            });
+            for (token.bytes) |byte| {
+                try tuple.field(byte, .{});
+            }
+            try tuple.end();
+        },
+        .array => |items| {
+            var tuple = try serializer.beginTuple(.{
+                .whitespace_style = .{ .fields = items.len },
+            });
+            for (items) |item| {
+                try tuple.fieldPrefix();
+                try writeZonValue(serializer, item);
+            }
+            try tuple.end();
+        },
+        .object => |entries| {
+            var object = try serializer.beginStruct(.{
+                .whitespace_style = .{ .fields = entries.len },
+            });
+            for (entries) |entry| {
+                try object.fieldPrefix(entry.key.bytes);
+                try writeZonValue(serializer, entry.value);
+            }
+            try object.end();
         },
     }
 }

@@ -9,6 +9,7 @@ const msgpack = @import("msgpack.zig");
 const toml = @import("toml.zig");
 const wasm = @import("wasm.zig");
 const yaml = @import("yaml.zig");
+const zon = @import("zon.zig");
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -44,6 +45,10 @@ pub fn main(init: std.process.Init) !void {
         try yaml.run(io, allocator);
         return;
     }
+    if (std.mem.eql(u8, mode, "zon")) {
+        try zon.run(io, allocator);
+        return;
+    }
     if (std.mem.eql(u8, mode, "wasm")) {
         try wasm.run(io, allocator);
         return;
@@ -56,5 +61,6 @@ pub fn main(init: std.process.Init) !void {
     try bson.run(io, allocator);
     try msgpack.run(io, allocator);
     try yaml.run(io, allocator);
+    try zon.run(io, allocator);
     try wasm.run(io, allocator);
 }
