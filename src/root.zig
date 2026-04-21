@@ -658,9 +658,12 @@ test {
     _ = @import("json_tests");
     _ = @import("msgpack.zig");
     _ = @import("msgpack_tests");
+    _ = @import("property_tests");
     _ = @import("toml.zig");
     _ = @import("toml_tests");
     _ = @import("wasm.zig");
     _ = @import("yaml.zig");
     _ = @import("yaml_tests");
+    _ = @import("zon.zig");
+    _ = @import("zon_tests");
 }

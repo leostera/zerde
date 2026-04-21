@@ -392,6 +392,16 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.addImport("zon_tests", zon_tests_mod);
 
+    const property_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/property_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zerde", .module = tests_root_mod },
+        },
+    });
+    tests.root_module.addImport("property_tests", property_tests_mod);
+
     const run_tests = b.addRunArtifact(tests);
 
     const test_step = b.step("test", "Run zerde tests");
