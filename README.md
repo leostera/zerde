@@ -9,6 +9,7 @@ What you get:
 
 - one typed API across JSON, TOML, YAML, CBOR, BSON, MessagePack, and binary
 - fast read and write paths without a required runtime value tree
+- an optional `zerde.Value` tree for transcoding and schema-less tooling
 - per-type and per-call customization for field renames and wire-shape policy
 - owned, arena-backed, and aliased slice parse entrypoints
 - wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing JSON, YAML, MessagePack, and other format payloads inside the module
@@ -133,6 +134,24 @@ const zerde = @import("zerde");
 ```
 
 Benchmark history and per-format runs live in [`bench/`](bench).
+
+## CLI
+
+`zerde` also ships with a small transcoder for self-describing formats.
+
+Build it with:
+
+```sh
+zig build transcode
+```
+
+Then use it like:
+
+```sh
+./zig-out/bin/zerde-transcode --from json --to yaml crew.json
+```
+
+It currently supports `json`, `toml`, `yaml`, `cbor`, `bson`, and `msgpack`.
 
 ## Customization
 

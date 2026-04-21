@@ -29,6 +29,12 @@ Compile the wasm examples:
 zig build examples
 ```
 
+Build the transcoder CLI:
+
+```sh
+zig build transcode
+```
+
 The examples in `examples/` cover both the native typed API across formats and
 the `zerde.wasm` browser-style pointer+length interop path.
 
@@ -55,7 +61,7 @@ Benchmark workflow and benchmark-log conventions live in [bench/README.md](bench
 That file also defines benchmark fairness policy: time the full public usage path, including any mandatory intermediate-representation conversion required by a compared library.
 The benchmark runner itself is built on `zBench`.
 GitHub Actions mirrors this setup with `.github/workflows/ci.yml` for `zig build test`
-plus native library, wasm library, example, and benchmark-harness builds, and
+plus native library, wasm library, transcoder, example, and benchmark-harness builds, and
 `.github/workflows/bench.yml` for full per-format benchmark runs on `main` and
 manual dispatches.
 Tagged commits on `main` are published through `.github/workflows/release.yml`.

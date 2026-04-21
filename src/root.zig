@@ -11,6 +11,7 @@ const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
 const msgpack_impl = @import("msgpack.zig");
 const toml_impl = @import("toml.zig");
+const value_impl = @import("value.zig");
 const wasm_impl = @import("wasm.zig");
 const yaml_impl = @import("yaml.zig");
 const diagnostic_impl = @import("diagnostic.zig");
@@ -29,8 +30,10 @@ pub const cbor = cbor_impl;
 pub const json = json_impl;
 pub const msgpack = msgpack_impl;
 pub const toml = toml_impl;
+pub const value = value_impl;
 pub const wasm = wasm_impl;
 pub const yaml = yaml_impl;
+pub const Value = value_impl.Value;
 
 /// Arena-backed parsed value that can be released in one call.
 pub fn Owned(comptime T: type) type {
@@ -46,27 +49,27 @@ pub fn Owned(comptime T: type) type {
 }
 
 /// Recursively frees values produced by the owning parse paths.
-pub fn free(allocator: std.mem.Allocator, value: anytype) void {
-    typed.free(allocator, value);
+pub fn free(allocator: std.mem.Allocator, parsed: anytype) void {
+    typed.free(allocator, parsed);
 }
 
 /// Serializes `value` with the default serde and format configuration.
-pub fn serialize(comptime Format: type, writer: *std.Io.Writer, value: anytype) !void {
-    try serializeWith(Format, writer, value, .{}, .{});
+pub fn serialize(comptime Format: type, writer: *std.Io.Writer, input: anytype) !void {
+    try serializeWith(Format, writer, input, .{}, .{});
 }
 
 /// Serializes `value` with separate typed-layer and format-layer configuration.
 pub fn serializeWith(
     comptime Format: type,
     writer: *std.Io.Writer,
-    value: anytype,
+    input: anytype,
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !void {
     if (!@hasDecl(Format, "serializer")) {
         @compileError("format " ++ @typeName(Format) ++ " does not implement serializer()");
     }
-    try typed.serialize(Format, writer, value, serde_cfg, format_cfg);
+    try typed.serialize(Format, writer, input, serde_cfg, format_cfg);
 }
 
 /// Deserializes `T` from a streaming reader using the format's typed backend.
@@ -94,9 +97,9 @@ pub fn deserializeWith(
 
     var deserializer = try Format.readerDeserializer(allocator, reader, format_cfg);
     defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
-    const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
+    const parsed = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
     if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
-    return value;
+    return parsed;
 }
 
 /// Deserializes `T` while populating `diagnostic` with field-path and location context on failure.
@@ -118,7 +121,7 @@ pub fn deserializeWithDiagnostics(
     var deserializer = try Format.readerDeserializer(allocator, reader, format_cfg);
     defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
 
-    const value = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
+    const parsed = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
         diagnostic.captureFromDeserializer(&deserializer);
         return err;
     };
@@ -130,7 +133,7 @@ pub fn deserializeWithDiagnostics(
         };
     }
 
-    return value;
+    return parsed;
 }
 
 /// Deserializes `T` with separate typed-layer and format-layer configuration into an internal arena.
@@ -144,10 +147,10 @@ pub fn deserializeOwnedWith(
 ) !Owned(T) {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     errdefer arena.deinit();
-    const value = try deserializeWith(Format, T, arena.allocator(), reader, serde_cfg, format_cfg);
+    const parsed = try deserializeWith(Format, T, arena.allocator(), reader, serde_cfg, format_cfg);
     return .{
         .arena = arena,
-        .value = value,
+        .value = parsed,
     };
 }
 
@@ -181,9 +184,9 @@ pub fn parseSliceWith(
 
     var deserializer = try Format.sliceDeserializer(allocator, input, format_cfg);
     defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
-    const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
+    const parsed = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
     if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
-    return value;
+    return parsed;
 }
 
 /// Parses `T` from a slice while populating `diagnostic` with field-path and location context on failure.
@@ -205,7 +208,7 @@ pub fn parseSliceWithDiagnostics(
     var deserializer = try Format.sliceDeserializer(allocator, input, format_cfg);
     defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
 
-    const value = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
+    const parsed = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
         diagnostic.captureFromDeserializer(&deserializer);
         return err;
     };
@@ -217,7 +220,7 @@ pub fn parseSliceWithDiagnostics(
         };
     }
 
-    return value;
+    return parsed;
 }
 
 /// Parses `T` with separate typed-layer and format-layer configuration into an internal arena.
@@ -231,10 +234,10 @@ pub fn parseSliceOwnedWith(
 ) !Owned(T) {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     errdefer arena.deinit();
-    const value = try parseSliceWith(Format, T, arena.allocator(), input, serde_cfg, format_cfg);
+    const parsed = try parseSliceWith(Format, T, arena.allocator(), input, serde_cfg, format_cfg);
     return .{
         .arena = arena,
-        .value = value,
+        .value = parsed,
     };
 }
 
@@ -283,14 +286,14 @@ const allocation_example_invalid_json =
     \\{"name":"Franky","bounty":394000000,"notes":[3,5,8,13],"metadata":{"shipwright_title":"Iron\nPirate","cola_powered":true},"extra":99}
 ;
 
-fn expectAllocationExample(value: AllocationExample) !void {
-    try std.testing.expectEqualStrings("Franky", value.name);
-    try std.testing.expectEqual(@as(u32, 394000000), value.bounty);
-    try std.testing.expectEqualSlices(u16, &.{ 3, 5, 8, 13 }, value.notes);
-    try std.testing.expectEqualStrings("Iron\nPirate", value.metadata.shipwrightTitle);
-    try std.testing.expect(value.metadata.colaPowered);
-    try std.testing.expect(value.extra != null);
-    try std.testing.expectEqualStrings("BF-37", value.extra.?);
+fn expectAllocationExample(example: AllocationExample) !void {
+    try std.testing.expectEqualStrings("Franky", example.name);
+    try std.testing.expectEqual(@as(u32, 394000000), example.bounty);
+    try std.testing.expectEqualSlices(u16, &.{ 3, 5, 8, 13 }, example.notes);
+    try std.testing.expectEqualStrings("Iron\nPirate", example.metadata.shipwrightTitle);
+    try std.testing.expect(example.metadata.colaPowered);
+    try std.testing.expect(example.extra != null);
+    try std.testing.expectEqualStrings("BF-37", example.extra.?);
 }
 
 fn parseSliceAllocationTest(allocator: std.mem.Allocator) !void {

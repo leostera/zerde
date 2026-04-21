@@ -46,6 +46,9 @@ jobs:
       - name: Build examples
         run: zig build examples
 
+      - name: Build transcoder CLI
+        run: zig build transcode
+
   bench-build:
     name: Build Bench Harness
     runs-on: ubuntu-latest

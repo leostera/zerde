@@ -396,6 +396,11 @@ pub fn build(b: *std.Build) void {
         examples_step.dependOn(&install.step);
     }
 
+    const transcode_exe = addNativeExample(b, "zerde-transcode", "bin/zerde-transcode.zig", target, optimize, zerde_mod);
+    const install_transcode = b.addInstallArtifact(transcode_exe, .{});
+    const transcode_step = b.step("transcode", "Build the zerde transcoder CLI");
+    transcode_step.dependOn(&install_transcode.step);
+
     // Benchmarks live in a separate executable so they can use a different root file.
     const bench_exe = b.addExecutable(.{
         .name = "zerde-bench",
