@@ -23,6 +23,12 @@ Run the test suite:
 zig build test
 ```
 
+Compile the wasm examples:
+
+```sh
+zig build examples
+```
+
 Run all benchmarks:
 
 ```sh
@@ -39,6 +45,7 @@ zig build bench-json -Doptimize=ReleaseFast
 zig build bench-toml -Doptimize=ReleaseFast
 zig build bench-cbor -Doptimize=ReleaseFast
 zig build bench-yaml -Doptimize=ReleaseFast
+zig build bench-wasm -Doptimize=ReleaseFast
 ```
 
 Benchmark workflow and benchmark-log conventions live in [bench/README.md](bench/README.md).

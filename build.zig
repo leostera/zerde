@@ -4,6 +4,36 @@ fn lessThanString(_: void, lhs: []const u8, rhs: []const u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;
 }
 
+fn addWasmExample(
+    b: *std.Build,
+    comptime name: []const u8,
+    comptime path: []const u8,
+    optimize: std.builtin.OptimizeMode,
+    zerde_mod: *std.Build.Module,
+) *std.Build.Step.Compile {
+    const wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    });
+
+    const artifact = b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(path),
+            .target = wasm_target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zerde", .module = zerde_mod },
+            },
+        }),
+    });
+
+    artifact.entry = .disabled;
+    artifact.export_memory = true;
+    artifact.rdynamic = true;
+    return artifact;
+}
+
 fn generateCorpusTests(
     b: *std.Build,
     comptime format_name: []const u8,
@@ -103,11 +133,18 @@ pub fn build(b: *std.Build) void {
     const zerde_mod = b.addModule("zerde", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .optimize = optimize,
+    });
+
+    const tests_root_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
     });
 
     // `zig build test` exercises the library as a package module.
     const tests = b.addTest(.{
-        .root_module = zerde_mod,
+        .root_module = tests_root_mod,
     });
 
     const corpus_support_mod = b.createModule(.{
@@ -115,7 +152,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
 
@@ -125,7 +162,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus_support", .module = corpus_support_mod },
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const bin_corpus_generated_mod = b.createModule(.{
@@ -151,7 +188,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const json_corpus_generated_mod = b.createModule(.{
@@ -178,7 +215,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus_support", .module = corpus_support_mod },
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const toml_corpus_generated_mod = b.createModule(.{
@@ -205,7 +242,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus_support", .module = corpus_support_mod },
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const yaml_corpus_generated_mod = b.createModule(.{
@@ -232,7 +269,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus_support", .module = corpus_support_mod },
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const cbor_corpus_generated_mod = b.createModule(.{
@@ -259,7 +296,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus_support", .module = corpus_support_mod },
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const msgpack_corpus_generated_mod = b.createModule(.{
@@ -286,7 +323,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus_support", .module = corpus_support_mod },
-            .{ .name = "zerde", .module = zerde_mod },
+            .{ .name = "zerde", .module = tests_root_mod },
         },
     });
     const bson_corpus_generated_mod = b.createModule(.{
@@ -311,6 +348,18 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run zerde tests");
     test_step.dependOn(&run_tests.step);
+
+    const examples_step = b.step("examples", "Compile browser-oriented WASM examples");
+    inline for (.{
+        .{ "wasm-bin-bridge", "examples/wasm_bin_bridge.zig" },
+        .{ "wasm-json-bridge", "examples/wasm_json_bridge.zig" },
+        .{ "wasm-yaml-bridge", "examples/wasm_yaml_bridge.zig" },
+        .{ "wasm-msgpack-bridge", "examples/wasm_msgpack_bridge.zig" },
+    }) |example| {
+        const artifact = addWasmExample(b, example[0], example[1], optimize, zerde_mod);
+        const install = b.addInstallArtifact(artifact, .{});
+        examples_step.dependOn(&install.step);
+    }
 
     // Benchmarks live in a separate executable so they can use a different root file.
     const bench_exe = b.addExecutable(.{

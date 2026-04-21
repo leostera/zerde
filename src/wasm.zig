@@ -1,13 +1,16 @@
 //! WebAssembly / WASI interop helpers.
 //!
-//! This module does not define a new wire format. It packages the existing
-//! compact binary backend behind pointer+length helpers that are convenient to
-//! return from wasm exports or accept from JS-hosted callers.
+//! This module does not define a new wire format. It packages existing format
+//! backends behind pointer+length helpers that are convenient to expose from
+//! wasm exports or accept from JS-hosted callers.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const bin = @import("bin.zig");
+const json = @import("json.zig");
+const msgpack = @import("msgpack.zig");
 const typed = @import("typed.zig");
+const yaml = @import("yaml.zig");
 
 /// Pointer+length pair that is friendly to wasm exports.
 ///
@@ -18,7 +21,7 @@ pub const Slice = extern struct {
     len: usize,
 };
 
-/// Owns a serialized binary payload until the caller is done exposing it.
+/// Owns a serialized payload until the caller is done exposing it.
 pub const OwnedBuffer = struct {
     out: std.Io.Writer.Allocating,
 
@@ -57,7 +60,7 @@ pub fn bytesFromDescriptor(value: Slice) []const u8 {
 
 /// Serializes `value` into an owned wasm-friendly buffer using the compact binary backend.
 pub fn serializeOwned(allocator: Allocator, value: anytype) !OwnedBuffer {
-    return serializeOwnedWith(allocator, value, .{}, .{});
+    return serializeFormatOwned(bin, allocator, value);
 }
 
 /// Serializes `value` into an owned wasm-friendly buffer with custom typed and binary config.
@@ -67,20 +70,40 @@ pub fn serializeOwnedWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !OwnedBuffer {
+    return serializeFormatOwnedWith(bin, allocator, value, serde_cfg, format_cfg);
+}
+
+/// Serializes `value` into an owned wasm-friendly buffer using the selected format.
+pub fn serializeFormatOwned(comptime Format: type, allocator: Allocator, value: anytype) !OwnedBuffer {
+    return serializeFormatOwnedWith(Format, allocator, value, .{}, .{});
+}
+
+/// Serializes `value` into an owned wasm-friendly buffer with custom typed and format config.
+pub fn serializeFormatOwnedWith(
+    comptime Format: type,
+    allocator: Allocator,
+    value: anytype,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !OwnedBuffer {
+    if (!@hasDecl(Format, "serializeWith")) {
+        @compileError("format " ++ @typeName(Format) ++ " does not implement serializeWith()");
+    }
+
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
-    try bin.serializeWith(&out.writer, value, serde_cfg, format_cfg);
+    try Format.serializeWith(&out.writer, value, serde_cfg, format_cfg);
     return .{ .out = out };
 }
 
-/// Parses a typed value from a wasm pointer+length descriptor, owning strings and slices by default.
+/// Parses a typed value from a wasm pointer+length descriptor with the compact binary backend.
 pub fn parse(comptime T: type, allocator: Allocator, value: Slice) !T {
-    return parseWith(T, allocator, value, .{}, .{});
+    return parseFormat(bin, T, allocator, value);
 }
 
-/// Parses a typed value from raw pointer+length parts, owning strings and slices by default.
+/// Parses a typed value from raw pointer+length parts with the compact binary backend.
 pub fn parseParts(comptime T: type, allocator: Allocator, ptr: [*]const u8, len: usize) !T {
-    return parsePartsWith(T, allocator, ptr, len, .{}, .{});
+    return parseFormatParts(bin, T, allocator, ptr, len);
 }
 
 /// Parses a typed value from a wasm pointer+length descriptor with custom typed and binary config.
@@ -91,7 +114,7 @@ pub fn parseWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    return bin.parseSliceWith(T, allocator, bytesFromDescriptor(value), serde_cfg, format_cfg);
+    return parseFormatWith(bin, T, allocator, value, serde_cfg, format_cfg);
 }
 
 /// Parses a typed value from raw pointer+length parts with custom typed and binary config.
@@ -103,17 +126,17 @@ pub fn parsePartsWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    return bin.parseSliceWith(T, allocator, bytesFromParts(ptr, len), serde_cfg, format_cfg);
+    return parseFormatPartsWith(bin, T, allocator, ptr, len, serde_cfg, format_cfg);
 }
 
 /// Parses a typed value and may alias borrowed strings directly into the wasm input buffer.
 pub fn parseAliased(comptime T: type, allocator: Allocator, value: Slice) !T {
-    return parseAliasedWith(T, allocator, value, .{}, .{});
+    return parseFormatAliased(bin, T, allocator, value);
 }
 
 /// Parses from raw pointer+length parts and may alias borrowed strings directly into the wasm input buffer.
 pub fn parsePartsAliased(comptime T: type, allocator: Allocator, ptr: [*]const u8, len: usize) !T {
-    return parsePartsAliasedWith(T, allocator, ptr, len, .{}, .{});
+    return parseFormatPartsAliased(bin, T, allocator, ptr, len);
 }
 
 /// Parses a typed value from a wasm pointer+length descriptor and may alias borrowed strings.
@@ -124,7 +147,7 @@ pub fn parseAliasedWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    return bin.parseSliceAliasedWith(T, allocator, bytesFromDescriptor(value), serde_cfg, format_cfg);
+    return parseFormatAliasedWith(bin, T, allocator, value, serde_cfg, format_cfg);
 }
 
 /// Parses from raw pointer+length parts and may alias borrowed strings with custom config.
@@ -136,7 +159,85 @@ pub fn parsePartsAliasedWith(
     comptime serde_cfg: anytype,
     comptime format_cfg: anytype,
 ) !T {
-    return bin.parseSliceAliasedWith(T, allocator, bytesFromParts(ptr, len), serde_cfg, format_cfg);
+    return parseFormatPartsAliasedWith(bin, T, allocator, ptr, len, serde_cfg, format_cfg);
+}
+
+/// Parses a typed value from a wasm pointer+length descriptor using the selected format.
+pub fn parseFormat(comptime Format: type, comptime T: type, allocator: Allocator, value: Slice) !T {
+    return parseFormatWith(Format, T, allocator, value, .{}, .{});
+}
+
+/// Parses a typed value from raw pointer+length parts using the selected format.
+pub fn parseFormatParts(comptime Format: type, comptime T: type, allocator: Allocator, ptr: [*]const u8, len: usize) !T {
+    return parseFormatPartsWith(Format, T, allocator, ptr, len, .{}, .{});
+}
+
+/// Parses a typed value from a wasm pointer+length descriptor with custom typed and format config.
+pub fn parseFormatWith(
+    comptime Format: type,
+    comptime T: type,
+    allocator: Allocator,
+    value: Slice,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    return parseFormatPartsWith(Format, T, allocator, @ptrFromInt(value.ptr), value.len, serde_cfg, format_cfg);
+}
+
+/// Parses a typed value from raw pointer+length parts with custom typed and format config.
+pub fn parseFormatPartsWith(
+    comptime Format: type,
+    comptime T: type,
+    allocator: Allocator,
+    ptr: [*]const u8,
+    len: usize,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    if (!@hasDecl(Format, "parseSliceWith")) {
+        @compileError("format " ++ @typeName(Format) ++ " does not implement parseSliceWith()");
+    }
+
+    return Format.parseSliceWith(T, allocator, bytesFromParts(ptr, len), serde_cfg, format_cfg);
+}
+
+/// Parses a typed value from a wasm pointer+length descriptor and may alias borrowed strings.
+pub fn parseFormatAliased(comptime Format: type, comptime T: type, allocator: Allocator, value: Slice) !T {
+    return parseFormatAliasedWith(Format, T, allocator, value, .{}, .{});
+}
+
+/// Parses from raw pointer+length parts and may alias borrowed strings.
+pub fn parseFormatPartsAliased(comptime Format: type, comptime T: type, allocator: Allocator, ptr: [*]const u8, len: usize) !T {
+    return parseFormatPartsAliasedWith(Format, T, allocator, ptr, len, .{}, .{});
+}
+
+/// Parses a typed value from a wasm pointer+length descriptor and may alias borrowed strings.
+pub fn parseFormatAliasedWith(
+    comptime Format: type,
+    comptime T: type,
+    allocator: Allocator,
+    value: Slice,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    return parseFormatPartsAliasedWith(Format, T, allocator, @ptrFromInt(value.ptr), value.len, serde_cfg, format_cfg);
+}
+
+/// Parses from raw pointer+length parts and may alias borrowed strings with custom config.
+pub fn parseFormatPartsAliasedWith(
+    comptime Format: type,
+    comptime T: type,
+    allocator: Allocator,
+    ptr: [*]const u8,
+    len: usize,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    if (@hasDecl(Format, "parseSliceAliasedWith")) {
+        return Format.parseSliceAliasedWith(T, allocator, bytesFromParts(ptr, len), serde_cfg, format_cfg);
+    }
+
+    return parseFormatPartsWith(Format, T, allocator, ptr, len, serde_cfg, format_cfg);
 }
 
 test "serializeOwned exposes pointer length descriptor" {
@@ -241,4 +342,74 @@ test "parseParts entrypoints mirror descriptor entrypoints" {
     const title_ptr = @intFromPtr(aliased.title.ptr);
 
     try std.testing.expect(title_ptr >= begin and title_ptr < end);
+}
+
+test "format helpers roundtrip JSON through wasm pointers" {
+    const Example = struct {
+        captainName: []const u8,
+        bounty: u32,
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    var encoded = try serializeFormatOwnedWith(json, std.testing.allocator, Example{
+        .captainName = "Luffy",
+        .bounty = 3_000_000_000,
+    }, .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer encoded.deinit();
+
+    const decoded = try parseFormatWith(json, Example, std.testing.allocator, encoded.descriptor(), .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer typed.free(std.testing.allocator, decoded);
+
+    try std.testing.expectEqualStrings("Luffy", decoded.captainName);
+    try std.testing.expectEqual(@as(u32, 3_000_000_000), decoded.bounty);
+}
+
+test "format helpers parse YAML inside wasm" {
+    const Example = struct {
+        serviceName: []const u8,
+        port: u16,
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    const yaml_bytes =
+        \\service_name: sunny
+        \\port: 8080
+    ;
+
+    const decoded = try parseFormatAliasedWith(yaml, Example, std.testing.allocator, sliceDescriptor(yaml_bytes), .{
+        .rename_all = .snake_case,
+    }, .{});
+
+    try std.testing.expectEqualStrings("sunny", decoded.serviceName);
+    try std.testing.expectEqual(@as(u16, 8080), decoded.port);
+}
+
+test "format helpers parse MessagePack inside wasm" {
+    const Example = struct {
+        role: enum {
+            shipwright,
+            cook,
+        },
+        active: bool,
+    };
+
+    var encoded = try serializeFormatOwned(msgpack, std.testing.allocator, Example{
+        .role = .shipwright,
+        .active = true,
+    });
+    defer encoded.deinit();
+
+    const decoded = try parseFormat(msgpack, Example, std.testing.allocator, encoded.descriptor());
+    try std.testing.expectEqual(.shipwright, decoded.role);
+    try std.testing.expect(decoded.active);
 }
