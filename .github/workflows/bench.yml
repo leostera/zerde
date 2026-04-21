@@ -1,0 +1,59 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - bench/**
+      - build.zig
+      - build.zig.zon
+      - src/**
+      - tests/**
+      - vendor/**
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Bench ${{ matrix.format }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        format:
+          - json
+          - toml
+          - cbor
+          - bson
+          - msgpack
+          - yaml
+          - bin
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Run benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build bench-${{ matrix.format }} -Doptimize=ReleaseFast 2>&1 | tee bench-${{ matrix.format }}.txt
+
+      - name: Upload benchmark log
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.format }}
+          path: bench-${{ matrix.format }}.txt
