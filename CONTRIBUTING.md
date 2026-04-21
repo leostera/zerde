@@ -49,6 +49,7 @@ Run a single benchmark family:
 ```sh
 zig build bench-bin -Doptimize=ReleaseFast
 zig build bench-bson -Doptimize=ReleaseFast
+zig build bench-memory -Doptimize=ReleaseFast
 zig build bench-msgpack -Doptimize=ReleaseFast
 zig build bench-json -Doptimize=ReleaseFast
 zig build bench-zon -Doptimize=ReleaseFast
@@ -60,7 +61,7 @@ zig build bench-wasm -Doptimize=ReleaseFast
 
 Benchmark workflow and benchmark-log conventions live in [bench/README.md](bench/README.md).
 That file also defines benchmark fairness policy: time the full public usage path, including any mandatory intermediate-representation conversion required by a compared library.
-The benchmark runner itself is built on `zBench`.
+The timing runner itself is built on `zBench`.
 GitHub Actions mirrors this setup with `.github/workflows/ci.yml` for `zig build test`
 plus native library, wasm library, transcoder, example, and benchmark-harness builds, and
 `.github/workflows/bench.yml` for full per-format benchmark runs on `main` and
@@ -86,6 +87,26 @@ When adding fixtures:
 - keep the file in `zerde`'s canonical output form for that format and config
 - use descriptive names so a failing generated test is easy to identify
 - run `zig build test` after adding or changing corpus fixtures
+
+Invalid-input hardening fixtures live in `tests/corpus_invalid/<format>`.
+These seed the parser hardening tests and fuzz harnesses.
+
+When adding invalid fixtures:
+
+- prefer names that describe the failure shape, such as `wrong_type.json`, `truncated_array.toml`, `truncated_string.msgpack`, or `invalid_bool_tag.bin`
+- keep them minimal and format-specific
+- add fixtures for new supported formats and new failure modes when parser behavior changes
+
+## Fuzzing And Hardening
+
+`zig build test` also runs:
+
+- property-style roundtrip fuzzing for the supported typed formats
+- parser hardening fuzzers seeded from `tests/corpus_invalid/<format>`
+- invalid-input tests that assert parse failure without leaks
+
+When changing parser behavior or adding a new format, keep the valid corpus,
+invalid corpus, and fuzz coverage aligned.
 
 ## Commit Style
 

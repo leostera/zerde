@@ -12,6 +12,7 @@ What you get:
 - an optional `zerde.Value` tree for transcoding and schema-less tooling
 - per-type and per-call customization for field renames and wire-shape policy
 - owned, arena-backed, and aliased slice parse entrypoints
+- corpus-backed, property-tested, and fuzz-hardened format coverage
 - wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing JSON, ZON, YAML, MessagePack, and other format payloads inside the module
 
 Current benchmark snapshot on the repo's mixed nested workload:

@@ -9,12 +9,14 @@ Project conventions for automated changes:
 - keep `.github/workflows/ci.yml` validating native lib, wasm lib, tests, examples, the transcoder CLI, and `zig build bench-build`
 - keep `.github/workflows/release.yml` aligned with the documented release process and tag conventions
 - benchmark workflow lives in `bench/README.md`
-- benchmark history lives in `bench/BIN.md`, `bench/BSON.md`, `bench/CBOR.md`, `bench/JSON.md`, `bench/MSGPACK.md`, `bench/TOML.md`, `bench/WASM.md`, `bench/YAML.md`, and `bench/ZON.md`
+- benchmark history lives in `bench/BIN.md`, `bench/BSON.md`, `bench/CBOR.md`, `bench/JSON.md`, `bench/MEMORY.md`, `bench/MSGPACK.md`, `bench/TOML.md`, `bench/WASM.md`, `bench/YAML.md`, and `bench/ZON.md`
 - benchmark timing is implemented with `zBench`; keep the scenario workloads and fairness policy stable unless you are intentionally changing benchmark behavior
 - add benchmark log entries only for real benchmark-affecting changes, newest first, with sections named `## YYYY-MM-DD - <hash>`
 - corpus roundtrip fixtures live in `tests/corpus/<format>` and should stay in canonical output form
+- invalid corpus fixtures live in `tests/corpus_invalid/<format>` and should stay minimal, format-specific, and clearly named by failure shape
 - prefer feature-first corpus names such as `null.json`, `empty.toml`, `array_float.yaml`, `object_single.cbor`, `object_nested.bson`, `enum_field.msgpack`, `object_single.zon`, and `object_single.bin`
 - corpus tests are generated from `tests/corpus/bin`, `tests/corpus/bson`, `tests/corpus/cbor`, `tests/corpus/json`, `tests/corpus/msgpack`, `tests/corpus/toml`, `tests/corpus/yaml`, and `tests/corpus/zon`
+- `zig build test` also covers property-style roundtrip fuzzing, parser hardening fuzzing, and invalid-input leak tests
 - wasm examples live in `examples/` and should keep building with `zig build examples`
 - the transcoder CLI lives in `bin/` and should keep building with `zig build transcode`
 - keep `README.md`, `bench/README.md`, and `CONTRIBUTING.md` aligned with the current workflow

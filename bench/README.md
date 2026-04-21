@@ -2,7 +2,10 @@
 
 This directory contains the benchmark harness and benchmark history for `zerde`.
 
-The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) for timing and result collection while keeping `zerde`'s existing scenario workloads, fairness policy, and benchmark-history files.
+The timing runner uses [`zBench`](https://github.com/hendriknielaender/zBench) for result collection while keeping `zerde`'s existing scenario workloads, fairness policy, and benchmark-history files.
+There is also a separate allocation benchmark that tracks allocation calls,
+allocated bytes, and peak live bytes for `zerde`'s own parse/write/roundtrip
+paths.
 
 ## Layout
 
@@ -11,6 +14,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/bson.zig`: BSON benchmark entrypoint
 - `bench/cbor.zig`: CBOR benchmark entrypoint
 - `bench/json.zig`: JSON benchmark entrypoint
+- `bench/memory.zig`: allocation benchmark entrypoint
 - `bench/msgpack.zig`: MessagePack benchmark entrypoint
 - `bench/toml.zig`: TOML benchmark entrypoint
 - `bench/wasm.zig`: WASM helper benchmark entrypoint
@@ -22,6 +26,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/CBOR.md`: running CBOR benchmark history
 - `bench/JSON.md`: running JSON benchmark history
 - `bench/MSGPACK.md`: running MessagePack benchmark history
+- `bench/MEMORY.md`: running allocation benchmark history
 - `bench/TOML.md`: running TOML benchmark history
 - `bench/WASM.md`: running WASM benchmark history
 - `bench/YAML.md`: running YAML benchmark history
@@ -45,6 +50,12 @@ Run JSON only:
 
 ```sh
 zig build bench-json -Doptimize=ReleaseFast
+```
+
+Run the allocation benchmark:
+
+```sh
+zig build bench-memory -Doptimize=ReleaseFast
 ```
 
 Run TOML only:
@@ -106,10 +117,14 @@ zig build test
 - MessagePack compares `zerde` against `msgpack.zig`
 - YAML compares `zerde` against `zig-yaml`
 - WASM compares `zerde.wasm` against the equivalent direct `zerde.bin` path to measure helper overhead rather than wire-format speed
+- the allocation benchmark is `zerde`-only and measures allocator behavior rather than external relative speed
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
 The current harness measures parse, write, and roundtrip (`typed -> bytes -> typed`) cost.
 `zBench` is configured with the same fixed per-scenario iteration counts that the repo used before the migration so successive runs stay comparable.
+
+The allocation benchmark reuses the same scenarios, but records allocation
+counts, remaps, total allocated bytes, and peak live bytes instead of timing.
 
 ## Benchmark Policy
 
@@ -122,6 +137,13 @@ Benchmarks should measure the full cost of the public API path a user actually p
 - do not add extra benchmark-layer conversions that the compared library does not actually require
 
 In other words, benchmark end-to-end usage cost, not just the format engine in isolation.
+
+The allocation benchmark follows the same rule for `zerde`'s own APIs:
+
+- parse measures the full owning typed parse path
+- parse aliased measures the public aliased parse path when a format supports it
+- write measures the public serializer path
+- roundtrip measures `typed -> bytes -> typed`
 
 Current harness behavior follows that rule:
 
