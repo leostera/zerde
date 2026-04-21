@@ -7,13 +7,17 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 ## Layout
 
 - `bench/bench.zig`: benchmark entrypoint
+- `bench/bson.zig`: BSON benchmark entrypoint
 - `bench/cbor.zig`: CBOR benchmark entrypoint
 - `bench/json.zig`: JSON benchmark entrypoint
+- `bench/msgpack.zig`: MessagePack benchmark entrypoint
 - `bench/toml.zig`: TOML benchmark entrypoint
 - `bench/yaml.zig`: YAML benchmark entrypoint
 - `bench/common.zig`: shared scenarios, payload builders, and benchmark loops
+- `bench/BSON.md`: running BSON benchmark history
 - `bench/CBOR.md`: running CBOR benchmark history
 - `bench/JSON.md`: running JSON benchmark history
+- `bench/MSGPACK.md`: running MessagePack benchmark history
 - `bench/TOML.md`: running TOML benchmark history
 - `bench/YAML.md`: running YAML benchmark history
 
@@ -43,6 +47,18 @@ Run CBOR only:
 zig build bench-cbor -Doptimize=ReleaseFast
 ```
 
+Run BSON only:
+
+```sh
+zig build bench-bson -Doptimize=ReleaseFast
+```
+
+Run MessagePack only:
+
+```sh
+zig build bench-msgpack -Doptimize=ReleaseFast
+```
+
 Run YAML only:
 
 ```sh
@@ -60,6 +76,8 @@ zig build test
 - JSON compares `zerde` against Zig's `std.json`
 - TOML compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
 - CBOR compares `zerde` against `zbor`
+- BSON compares `zerde` against `zig-bson`
+- MessagePack compares `zerde` against `msgpack.zig`
 - YAML compares `zerde` against `zig-yaml`
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
@@ -89,6 +107,12 @@ Current harness behavior follows that rule:
 - CBOR parse compares `zerde.parseSliceAliased(..., Payload, ...)` against `zbor.DataItem.new(...) + zbor.parse(ZborPayload, ...)`
 - CBOR write compares `zerde.serialize(...)` against `zbor.stringify(...)`
 - CBOR roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `zbor.stringify(...) + zbor.DataItem.new(...) + zbor.parse(...)`
+- BSON parse compares `zerde.parseSliceAliased(..., BsonPayload, ...)` against `zig_bson.reader(...).into(BsonPayload)`
+- BSON write compares `zerde.serialize(...)` against `zig_bson.write(...)`
+- BSON roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `zig_bson.write(...) + zig_bson.reader(...).into(...)`
+- MessagePack parse compares `zerde.parseSliceAliased(..., MsgpackPayload, ...)` against `zig_msgpack.decodeFromSliceLeaky(...)`
+- MessagePack write compares `zerde.serialize(...)` against `zig_msgpack.encode(...)`
+- MessagePack roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `zig_msgpack.encode(...) + zig_msgpack.decodeFromSliceLeaky(...)`
 - YAML parse compares `zerde.parseSliceAliased(..., YamlPayload, ...)` against `Yaml.load(...) + Yaml.parse(..., YamlPayload)`, so the baseline's document-load step stays inside the timed region
 - YAML write compares `zerde.serializeWith(..., .{ .omit_null_fields = true }, .{ .indent_width = 4 })` against `zig_yaml.stringify(...)`
 - YAML roundtrip compares `zerde.serializeWith(...) + zerde.parseSliceAliased(...)` against `zig_yaml.stringify(...) + Yaml.load(...) + Yaml.parse(...)`
