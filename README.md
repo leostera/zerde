@@ -11,7 +11,7 @@ What you get:
 - fast read and write paths without a required runtime value tree
 - per-type and per-call customization for field renames and wire-shape policy
 - owned, arena-backed, and aliased slice parse entrypoints
-- wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing format payloads inside the module
+- wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing JSON, YAML, MessagePack, and other format payloads inside the module
 
 ```zig
 const std = @import("std");
@@ -59,6 +59,44 @@ pub fn main() !void {
 | TOML | yes | yes | yes | yes | Practical TOML subset centered on scalars, arrays, tables, and arrays-of-tables |
 | CBOR | yes | yes | yes | yes | Definite-length writer; read accepts definite and indefinite arrays/maps |
 | YAML | yes | yes | yes | yes | Practical block-YAML subset with block mappings, block sequences, and flow scalar arrays |
+
+## WebAssembly / WASI
+
+`zerde` is not limited to its compact binary transport in wasm.
+
+The `zerde.wasm` helpers can:
+
+- serialize typed Zig values into wasm-friendly pointer+length buffers
+- parse JSON, YAML, MessagePack, and other supported payloads inside the module
+- reserialize those typed values back into JSON, binary, or another format before handing bytes back to JS
+
+```zig
+const std = @import("std");
+const zerde = @import("zerde");
+
+const CrewManifest = struct {
+    captainName: []const u8,
+    bounty: u32,
+    shipwright: bool,
+
+    pub const serde = .{
+        .rename_all = .snake_case,
+    };
+};
+
+pub fn normalizeJson(allocator: std.mem.Allocator, input: []const u8) !zerde.wasm.OwnedBuffer {
+    const manifest = try zerde.wasm.parseFormatWith(zerde.json, CrewManifest, allocator, zerde.wasm.sliceDescriptor(input), .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer zerde.free(allocator, manifest);
+
+    return zerde.wasm.serializeFormatOwnedWith(zerde.json, allocator, manifest, .{
+        .rename_all = .snake_case,
+    }, .{});
+}
+```
+
+Browser-oriented wasm examples live in [`examples/`](examples), and you can build them with `zig build examples`.
 
 ## Install
 

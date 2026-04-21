@@ -4,6 +4,11 @@ This folder contains small browser-oriented wasm examples that use `zerde.wasm`
 to move typed data across a JS boundary or parse foreign payloads inside the
 module.
 
+The examples show the two main wasm use cases:
+
+- emit typed Zig values as wasm-owned output buffers that JS can read through `ptr,len`
+- accept JSON, YAML, MessagePack, or binary payloads from JS, deserialize them inside wasm, and produce a typed result or a new serialized payload
+
 Build them all with:
 
 ```sh
