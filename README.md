@@ -11,6 +11,7 @@ What you get:
 - fast read and write paths without a required runtime value tree
 - per-type and per-call customization for field renames and wire-shape policy
 - owned, arena-backed, and aliased slice parse entrypoints
+- wasm/WASI pointer+length helpers for moving typed values across JS boundaries
 
 ```zig
 const std = @import("std");

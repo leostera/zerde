@@ -11,6 +11,7 @@ const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
 const msgpack_impl = @import("msgpack.zig");
 const toml_impl = @import("toml.zig");
+const wasm_impl = @import("wasm.zig");
 const yaml_impl = @import("yaml.zig");
 const diagnostic_impl = @import("diagnostic.zig");
 const meta = @import("meta.zig");
@@ -28,6 +29,7 @@ pub const cbor = cbor_impl;
 pub const json = json_impl;
 pub const msgpack = msgpack_impl;
 pub const toml = toml_impl;
+pub const wasm = wasm_impl;
 pub const yaml = yaml_impl;
 
 /// Arena-backed parsed value that can be released in one call.
@@ -653,6 +655,7 @@ test {
     _ = @import("msgpack_tests");
     _ = @import("toml.zig");
     _ = @import("toml_tests");
+    _ = @import("wasm.zig");
     _ = @import("yaml.zig");
     _ = @import("yaml_tests");
 }
