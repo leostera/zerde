@@ -35,6 +35,43 @@ Current scenarios:
 - `medium`: `24` endpoints, `96` metrics, `4,500` events, `1_000` parse iterations, `1_000` write iterations, `1_000` roundtrip iterations
 - `large`: `64` endpoints, `512` metrics, `450,000` events, `100` parse iterations, `100` write iterations, `100` roundtrip iterations
 
+## 2026-04-21 - 73bb719
+
+Changes since previous run:
+
+- expanded `zerde.wasm` from binary-only helpers into format-aware helpers that can parse and serialize JSON, YAML, MessagePack, and any other backend that exposes the normal typed slice APIs
+- added browser-oriented freestanding wasm examples for binary, JSON, YAML, and MessagePack payloads
+- kept the same benchmark workload so this run isolates the overhead of the broader wasm helper surface itself
+
+### Parse
+
+| Scenario | Parse Size | Iterations | wasm ns/op | wasm MiB/s | bin ns/op | bin MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 1,303 B | 1000000 | 821.00 | 1513.57 | 816.00 | 1522.84 | `bin` 1.01x faster |
+| medium | 304,775 B | 1000 | 194349.00 | 1495.54 | 193578.00 | 1501.49 | effectively tied |
+| large | 30,267,904 B | 100 | 20586007.00 | 1402.20 | 20781071.00 | 1389.04 | `wasm` 1.01x faster |
+
+### Write
+
+| Scenario | Write Size | Iterations | wasm ns/op | wasm MiB/s | bin ns/op | bin MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 1,303 B | 1000000 | 3575.00 | 347.59 | 3421.00 | 363.24 | `bin` 1.05x faster |
+| medium | 304,775 B | 1000 | 280991.00 | 1034.40 | 280591.00 | 1035.87 | effectively tied |
+| large | 30,267,904 B | 100 | 30937982.00 | 933.02 | 30191607.00 | 956.08 | `bin` 1.02x faster |
+
+### Roundtrip
+
+| Scenario | Write Size | Iterations | wasm ns/op | wasm MiB/s | bin ns/op | bin MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 1,303 B | 1000000 | 4265.00 | 582.71 | 4267.00 | 582.44 | effectively tied |
+| medium | 304,775 B | 1000 | 487019.00 | 1193.61 | 478640.00 | 1214.51 | `bin` 1.02x faster |
+| large | 30,267,904 B | 100 | 53445461.00 | 1080.19 | 51520704.00 | 1120.55 | `bin` 1.04x faster |
+
+### Notes
+
+- The broader format-aware helper layer is still essentially free on parse; it remains within noise of the direct binary path.
+- Write and roundtrip stay close as well, with the direct path still slightly ahead because `zerde.wasm` keeps the owned buffer lifecycle that real wasm exports need.
+
 ## 2026-04-21 - 7ecaaef
 
 Changes since previous run:
