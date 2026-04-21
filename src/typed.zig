@@ -68,7 +68,7 @@ pub fn serialize(comptime Format: type, writer: *std.Io.Writer, value: anytype, 
 
 /// Entry point used by `root.zig` once a format-specific deserializer has been created.
 pub fn deserialize(comptime T: type, allocator: Allocator, deserializer: anytype, comptime cfg: anytype) anyerror!T {
-    return deserializeWithDiagnostics(T, allocator, deserializer, cfg, null);
+    return deserializeValue(T, allocator, deserializer, cfg, null, false);
 }
 
 pub fn deserializeWithDiagnostics(
@@ -78,7 +78,7 @@ pub fn deserializeWithDiagnostics(
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
 ) anyerror!T {
-    return deserializeValue(T, allocator, deserializer, cfg, diagnostics);
+    return deserializeValue(T, allocator, deserializer, cfg, diagnostics, true);
 }
 
 fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !void {
@@ -215,6 +215,7 @@ fn deserializeValue(
     deserializer: anytype,
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
+    comptime track_diagnostics: bool,
 ) anyerror!T {
     const DeserializerType = @TypeOf(deserializer.*);
     return switch (@typeInfo(T)) {
@@ -237,12 +238,12 @@ fn deserializeValue(
                     break :blk null;
                 }
             }
-            break :blk try deserializeValue(info.child, allocator, deserializer, cfg, diagnostics);
+            break :blk try deserializeValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics);
         },
         .@"enum" => try decodeEnumValue(T, allocator, deserializer),
-        .array => |info| try deserializeArray(T, info, allocator, deserializer, cfg, diagnostics),
-        .pointer => |info| try deserializePointer(T, info, allocator, deserializer, cfg, diagnostics),
-        .@"struct" => |info| try deserializeStruct(T, info, allocator, deserializer, cfg, diagnostics),
+        .array => |info| try deserializeArray(T, info, allocator, deserializer, cfg, diagnostics, track_diagnostics),
+        .pointer => |info| try deserializePointer(T, info, allocator, deserializer, cfg, diagnostics, track_diagnostics),
+        .@"struct" => |info| try deserializeStruct(T, info, allocator, deserializer, cfg, diagnostics, track_diagnostics),
         else => error.UnsupportedType,
     };
 }
@@ -297,6 +298,7 @@ fn deserializeArray(
     deserializer: anytype,
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
+    comptime track_diagnostics: bool,
 ) anyerror!T {
     const DeserializerType = @TypeOf(deserializer.*);
 
@@ -320,13 +322,13 @@ fn deserializeArray(
     if (known_len) |_| {
         if (@hasDecl(DeserializerType, "finishKnownLenArray")) {
             inline for (0..info.len) |index| {
-                result[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, index);
+                result[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics, index);
             }
             try deserializer.finishKnownLenArray();
         } else {
             inline for (0..info.len) |index| {
                 if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
-                result[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, index);
+                result[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics, index);
             }
             if (try deserializer.nextArrayItem()) return error.LengthMismatch;
         }
@@ -336,7 +338,7 @@ fn deserializeArray(
     var index: usize = 0;
     while (try deserializer.nextArrayItem()) {
         if (index >= info.len) return error.LengthMismatch;
-        result[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, index);
+        result[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics, index);
         index += 1;
     }
 
@@ -351,6 +353,7 @@ fn deserializePointer(
     deserializer: anytype,
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
+    comptime track_diagnostics: bool,
 ) anyerror!T {
     const DeserializerType = @TypeOf(deserializer.*);
     const borrowed_strings = @hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings();
@@ -362,6 +365,9 @@ fn deserializePointer(
                 // Aliased slice parses can hand byte and string fields straight back to the caller without copying.
                 if (borrowed_strings) {
                     return token.bytes;
+                }
+                if (token.allocated) {
+                    return if (info.is_const) token.bytes else @constCast(token.bytes);
                 }
                 defer token.deinit(allocator);
                 return allocator.dupe(info.child, token.bytes);
@@ -379,14 +385,14 @@ fn deserializePointer(
 
                 if (@hasDecl(DeserializerType, "finishKnownLenArray")) {
                     for (0..len) |index| {
-                        items[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, index);
+                        items[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics, index);
                         initialized = index + 1;
                     }
                     try deserializer.finishKnownLenArray();
                 } else {
                     for (0..len) |index| {
                         if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
-                        items[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, index);
+                        items[index] = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics, index);
                         initialized = index + 1;
                     }
 
@@ -403,7 +409,7 @@ fn deserializePointer(
             }
 
             while (try deserializer.nextArrayItem()) {
-                const item = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, items.items.len);
+                const item = try deserializeIndexedValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics, items.items.len);
                 try items.append(allocator, item);
             }
 
@@ -412,7 +418,7 @@ fn deserializePointer(
         .one => {
             const ptr = try allocator.create(info.child);
             errdefer allocator.destroy(ptr);
-            ptr.* = try deserializeValue(info.child, allocator, deserializer, cfg, diagnostics);
+            ptr.* = try deserializeValue(info.child, allocator, deserializer, cfg, diagnostics, track_diagnostics);
             return ptr;
         },
         else => return error.UnsupportedType,
@@ -451,6 +457,7 @@ fn deserializeStruct(
     deserializer: anytype,
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
+    comptime track_diagnostics: bool,
 ) anyerror!T {
     if (info.is_tuple) return error.UnsupportedType;
 
@@ -468,7 +475,7 @@ fn deserializeStruct(
                 @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ struct_field.name);
             }
 
-            @field(ordered_result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, struct_field.name);
+            @field(ordered_result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field.name);
             ordered_seen[i] = true;
         }
 
@@ -494,7 +501,7 @@ fn deserializeStruct(
                     inline for (info.fields, 0..) |struct_field, i| {
                         if (field_index == i) {
                             if (seen[i]) return error.DuplicateField;
-                            @field(result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, struct_field.name);
+                            @field(result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field.name);
                             seen[i] = true;
                         }
                     }
@@ -524,7 +531,7 @@ fn deserializeStruct(
             inline for (info.fields, 0..) |struct_field, i| {
                 if (field_index == i) {
                     if (seen[i]) return error.DuplicateField;
-                    @field(result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, struct_field.name);
+                    @field(result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field.name);
                     seen[i] = true;
                 }
             }
@@ -557,11 +564,12 @@ fn deserializeIndexedValue(
     deserializer: anytype,
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
+    comptime track_diagnostics: bool,
     index: usize,
 ) anyerror!T {
-    if (diagnostics) |diag| diag.pushIndex(index);
-    const value = deserializeValue(T, allocator, deserializer, cfg, diagnostics) catch |err| return err;
-    if (diagnostics) |diag| diag.pop();
+    if (track_diagnostics) diagnostics.?.pushIndex(index);
+    const value = deserializeValue(T, allocator, deserializer, cfg, diagnostics, track_diagnostics) catch |err| return err;
+    if (track_diagnostics) diagnostics.?.pop();
     return value;
 }
 
@@ -571,11 +579,12 @@ fn deserializeFieldValue(
     deserializer: anytype,
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
+    comptime track_diagnostics: bool,
     comptime field_name: []const u8,
 ) anyerror!T {
-    if (diagnostics) |diag| diag.pushField(field_name);
-    const value = deserializeValue(T, allocator, deserializer, cfg, diagnostics) catch |err| return err;
-    if (diagnostics) |diag| diag.pop();
+    if (track_diagnostics) diagnostics.?.pushField(field_name);
+    const value = deserializeValue(T, allocator, deserializer, cfg, diagnostics, track_diagnostics) catch |err| return err;
+    if (track_diagnostics) diagnostics.?.pop();
     return value;
 }
 
@@ -591,24 +600,27 @@ fn matchStructFieldIndexInfo(
     comptime cfg: anytype,
     actual: []const u8,
 ) ?usize {
-    if (actual.len == 0) {
-        inline for (info.fields, 0..) |struct_field, i| {
-            const expected_name = meta.effectiveFieldName(T, struct_field.name, cfg);
-            if (expected_name.len == 0) return i;
+    inline for (info.fields, 0..) |field, i| {
+        const expected_name = meta.effectiveFieldName(T, field.name, cfg);
+        if (expected_name.len == actual.len and isFirstFieldWithNameLen(T, info, cfg, i)) {
+            return matchStructFieldIndexByLen(T, info, cfg, actual, expected_name.len);
         }
-        return null;
     }
 
-    inline for (info.fields, 0..) |len_field, len_index| {
-        const len_name = meta.effectiveFieldName(T, len_field.name, cfg);
-        if (isFirstFieldWithNameLen(T, info, cfg, len_index) and actual.len == len_name.len) {
-            inline for (info.fields, 0..) |struct_field, i| {
-                const expected_name = meta.effectiveFieldName(T, struct_field.name, cfg);
-                if (expected_name.len == len_name.len and fieldNameMatchesBucketed(actual, expected_name)) {
-                    return i;
-                }
-            }
-            return null;
+    return null;
+}
+
+fn matchStructFieldIndexByLen(
+    comptime T: type,
+    comptime info: std.builtin.Type.Struct,
+    comptime cfg: anytype,
+    actual: []const u8,
+    len: usize,
+) ?usize {
+    inline for (info.fields, 0..) |field, i| {
+        const expected_name = meta.effectiveFieldName(T, field.name, cfg);
+        if (expected_name.len == len and std.mem.eql(u8, actual, expected_name)) {
+            return i;
         }
     }
 
@@ -629,11 +641,6 @@ fn isFirstFieldWithNameLen(
         }
     }
     return true;
-}
-
-fn fieldNameMatchesBucketed(actual: []const u8, expected: []const u8) bool {
-    if (actual.len != expected.len) return false;
-    return std.mem.eql(u8, actual, expected);
 }
 
 fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {

@@ -274,6 +274,53 @@ pub fn JsonDeserializer(comptime Config: type) type {
             return self.parser.parseNumberToken();
         }
 
+        pub fn readInt(self: *Self, comptime T: type) !T {
+            self.parser.skipWhitespace();
+            const parsed = try self.parser.parseNumberSlice();
+
+            if (parsed.is_float) {
+                const value = std.fmt.parseFloat(f64, parsed.slice) catch return error.InvalidNumber;
+                const rounded = @round(value);
+                if (rounded != value) return error.UnexpectedType;
+
+                return switch (@typeInfo(T)) {
+                    .comptime_int => @as(T, @intFromFloat(rounded)),
+                    .int => std.math.cast(T, @as(i128, @intFromFloat(rounded))) orelse error.IntegerOverflow,
+                    else => error.UnsupportedType,
+                };
+            }
+
+            return switch (@typeInfo(T)) {
+                .comptime_int => std.fmt.parseInt(i128, parsed.slice, 10) catch return error.InvalidNumber,
+                .int => |info| blk: {
+                    if (info.signedness == .unsigned and parsed.slice.len > 0 and parsed.slice[0] == '-') {
+                        break :blk error.IntegerOverflow;
+                    }
+                    break :blk std.fmt.parseInt(T, parsed.slice, 10) catch |err| switch (err) {
+                        error.Overflow => error.IntegerOverflow,
+                        error.InvalidCharacter => error.InvalidNumber,
+                    };
+                },
+                else => error.UnsupportedType,
+            };
+        }
+
+        pub fn readFloat(self: *Self, comptime T: type) !T {
+            self.parser.skipWhitespace();
+            const parsed = try self.parser.parseNumberSlice();
+
+            if (!parsed.is_float) {
+                const integer = std.fmt.parseInt(i128, parsed.slice, 10) catch return error.InvalidNumber;
+                return @as(T, @floatFromInt(integer));
+            }
+
+            return switch (@typeInfo(T)) {
+                .comptime_float => @as(T, @floatCast(std.fmt.parseFloat(f64, parsed.slice) catch return error.InvalidNumber)),
+                .float => std.fmt.parseFloat(T, parsed.slice) catch return error.InvalidNumber,
+                else => error.UnsupportedType,
+            };
+        }
+
         pub fn readString(self: *Self, allocator: Allocator) !StringToken {
             self.parser.skipWhitespace();
             return self.parser.parseStringToken(allocator);
@@ -495,6 +542,11 @@ const Parser = struct {
     input: []const u8,
     index: usize = 0,
 
+    const NumberSlice = struct {
+        slice: []const u8,
+        is_float: bool,
+    };
+
     pub const Error = Allocator.Error || error{
         UnexpectedEndOfInput,
         UnexpectedToken,
@@ -508,6 +560,14 @@ const Parser = struct {
 
     // Shared token parser for both direct typed reads and recursive skipping.
     fn parseNumberToken(self: *Parser) Error!Number {
+        const parsed = try self.parseNumberSlice();
+        if (parsed.is_float) {
+            return .{ .float = std.fmt.parseFloat(f64, parsed.slice) catch return error.InvalidNumber };
+        }
+        return .{ .integer = std.fmt.parseInt(i128, parsed.slice, 10) catch return error.InvalidNumber };
+    }
+
+    fn parseNumberSlice(self: *Parser) Error!NumberSlice {
         const start = self.index;
         var is_float = false;
 
@@ -554,11 +614,10 @@ const Parser = struct {
             }
         }
 
-        const slice = self.input[start..self.index];
-        if (is_float) {
-            return .{ .float = std.fmt.parseFloat(f64, slice) catch return error.InvalidNumber };
-        }
-        return .{ .integer = std.fmt.parseInt(i128, slice, 10) catch return error.InvalidNumber };
+        return .{
+            .slice = self.input[start..self.index],
+            .is_float = is_float,
+        };
     }
 
     // Plain strings borrow from the input; escaped strings allocate rewritten bytes.
