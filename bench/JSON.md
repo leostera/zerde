@@ -29,6 +29,43 @@ The current large case produces a JSON document of about `107.58 MiB`.
 
 Runs before `8a3a0a9` used the older simpler payload, so they are not directly comparable to the newer mixed-payload runs.
 
+## 2026-04-21 - a7c1073
+
+Changes since previous run:
+
+- added JSON-native `readInt(T)` and `readFloat(T)` so the typed layer no longer forces integer and float fields through the generic `Number` token path
+- factored number scanning into a reusable parser helper so the JSON backend can parse once and then decode directly into the requested numeric type
+- kept the simpler object-field path; earlier JSON-specific field-index experiments were slower and were not kept
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 1000000 | 6040.24 | 614.02 | 13229.65 | 280.34 | `zerde` 2.19x faster |
+| medium | 1,139,497 B | 1000 | 1840889.39 | 590.32 | 3873659.17 | 280.54 | `zerde` 2.10x faster |
+| large | 112,803,589 B | 100 | 183837443.31 | 585.18 | 384019271.25 | 280.14 | `zerde` 2.09x faster |
+
+### Write
+
+| Scenario | zerde Size | std.json Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 4,289 B | 1000000 | 5530.54 | 670.61 | 6528.60 | 626.52 | `zerde` 1.18x faster |
+| medium | 1,139,497 B | 1,202,217 B | 1000 | 1454993.16 | 746.88 | 1782102.04 | 643.35 | `zerde` 1.22x faster |
+| large | 112,803,589 B | 118,794,235 B | 100 | 142903280.83 | 752.80 | 176081635.85 | 643.40 | `zerde` 1.23x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | std.json Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 4,289 B | 1000000 | 11715.38 | 633.16 | 20137.24 | 406.24 | `zerde` 1.72x faster |
+| medium | 1,139,497 B | 1,202,217 B | 1000 | 3316687.39 | 655.30 | 5781347.66 | 396.63 | `zerde` 1.74x faster |
+| large | 112,803,589 B | 118,794,235 B | 100 | 325798481.31 | 660.40 | 563453299.13 | 402.13 | `zerde` 1.73x faster |
+
+### Notes
+
+- This was a JSON read-path optimization, so the important result is parse moving back above `2x` on all three scenarios.
+- No JSON write-path logic changed in this commit; any write movement in this rerun should be treated as incidental rather than as a new serializer claim.
+
 ## 2026-04-21 - ced89d0
 
 Changes since previous run:
