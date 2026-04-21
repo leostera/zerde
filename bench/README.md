@@ -7,6 +7,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 ## Layout
 
 - `bench/bench.zig`: benchmark entrypoint
+- `bench/bin.zig`: binary benchmark entrypoint
 - `bench/bson.zig`: BSON benchmark entrypoint
 - `bench/cbor.zig`: CBOR benchmark entrypoint
 - `bench/json.zig`: JSON benchmark entrypoint
@@ -14,6 +15,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/toml.zig`: TOML benchmark entrypoint
 - `bench/yaml.zig`: YAML benchmark entrypoint
 - `bench/common.zig`: shared scenarios, payload builders, and benchmark loops
+- `bench/BIN.md`: running binary benchmark history
 - `bench/BSON.md`: running BSON benchmark history
 - `bench/CBOR.md`: running CBOR benchmark history
 - `bench/JSON.md`: running JSON benchmark history
@@ -27,6 +29,12 @@ Run all benchmarks:
 
 ```sh
 zig build bench -Doptimize=ReleaseFast
+```
+
+Run binary only:
+
+```sh
+zig build bench-bin -Doptimize=ReleaseFast
 ```
 
 Run JSON only:
@@ -73,6 +81,7 @@ zig build test
 
 ## Current comparisons
 
+- binary compares `zerde` against `bufzilla`
 - JSON compares `zerde` against Zig's `std.json`
 - TOML compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
 - CBOR compares `zerde` against `zbor`
@@ -98,6 +107,9 @@ In other words, benchmark end-to-end usage cost, not just the format engine in i
 
 Current harness behavior follows that rule:
 
+- binary parse compares `zerde.parseSliceAliased(..., BinPayload, ...)` against `decodeBufzilla(BinPayload, ...)`
+- binary write compares `zerde.serialize(...)` against `bufzilla.Writer.writeAny(...)`
+- binary roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `bufzilla.Writer.writeAny(...) + decodeBufzilla(...)`
 - JSON compares `zerde.parseSliceAliased(..., Payload, ...)` against `std.json.parseFromSliceLeaky(StdPayload, ...)`, so both sides are timed on their typed parse APIs
 - JSON write compares `zerde.serialize(...)` against `std.json.Stringify.value(...)`, so both sides are timed on their typed serialization APIs
 - JSON roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `std.json.Stringify.value(...) + std.json.parseFromSliceLeaky(...)`
@@ -121,6 +133,7 @@ Roundtrip benchmarks also perform one deep equality check per scenario before ti
 That keeps correctness in the harness without turning the timed region into a struct-comparison benchmark.
 
 If a future comparison target only offers an intermediate representation, the harness should include the required `IR -> typed` or `typed -> IR` step in the measured time.
+When two libraries do not share a wire format, benchmark parse against each library's own emitted bytes and call that out explicitly in the benchmark log.
 
 ## Recording Results
 
