@@ -654,6 +654,8 @@ test {
     _ = @import("meta.zig");
     _ = @import("typed.zig");
     _ = @import("cbor.zig");
+    _ = @import("fuzz_tests");
+    _ = @import("invalid_tests");
     _ = @import("json.zig");
     _ = @import("json_tests");
     _ = @import("msgpack.zig");
