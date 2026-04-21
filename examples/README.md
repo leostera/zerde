@@ -1,13 +1,11 @@
-# WASM Examples
+# Examples
 
-This folder contains small browser-oriented wasm examples that use `zerde.wasm`
-to move typed data across a JS boundary or parse foreign payloads inside the
-module.
+This folder contains both native Zig examples and browser-oriented wasm
+examples.
 
-The examples show the two main wasm use cases:
-
-- emit typed Zig values as wasm-owned output buffers that JS can read through `ptr,len`
-- accept JSON, YAML, MessagePack, or binary payloads from JS, deserialize them inside wasm, and produce a typed result or a new serialized payload
+The native examples show the core typed API across the supported formats.
+The wasm examples show how to move typed data across a JS boundary or parse
+foreign payloads inside the module.
 
 Build them all with:
 
@@ -15,9 +13,19 @@ Build them all with:
 zig build examples
 ```
 
-That produces `.wasm` artifacts in `zig-out/bin/`.
+That produces native executables and `.wasm` artifacts in `zig-out/bin/`.
 
-Each example exports the same host-facing helpers:
+Native examples in this folder:
+
+- `json_roundtrip.zig`: serialize a Zig struct to JSON and parse it back
+- `toml_roundtrip.zig`: serialize a Zig struct to TOML and parse it back
+- `yaml_roundtrip.zig`: serialize a Zig struct to YAML and parse it back
+- `cbor_roundtrip.zig`: serialize a Zig struct to CBOR and parse it back
+- `bson_roundtrip.zig`: serialize a Zig struct to BSON and parse it back
+- `msgpack_roundtrip.zig`: serialize a Zig struct to MessagePack and parse it back
+- `bin_roundtrip.zig`: serialize a Zig struct to `zerde`'s compact binary format and parse it back
+
+WASM examples in this folder export the same host-facing helpers:
 
 - `alloc_input(len)` to reserve wasm memory for incoming bytes
 - `free_input(ptr, len)` to release that input buffer

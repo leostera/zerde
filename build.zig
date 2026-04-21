@@ -34,6 +34,27 @@ fn addWasmExample(
     return artifact;
 }
 
+fn addNativeExample(
+    b: *std.Build,
+    comptime name: []const u8,
+    comptime path: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zerde_mod: *std.Build.Module,
+) *std.Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(path),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zerde", .module = zerde_mod },
+            },
+        }),
+    });
+}
+
 fn generateCorpusTests(
     b: *std.Build,
     comptime format_name: []const u8,
@@ -349,7 +370,21 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run zerde tests");
     test_step.dependOn(&run_tests.step);
 
-    const examples_step = b.step("examples", "Compile browser-oriented WASM examples");
+    const examples_step = b.step("examples", "Compile native and WASM examples");
+    inline for (.{
+        .{ "json-roundtrip", "examples/json_roundtrip.zig" },
+        .{ "toml-roundtrip", "examples/toml_roundtrip.zig" },
+        .{ "yaml-roundtrip", "examples/yaml_roundtrip.zig" },
+        .{ "cbor-roundtrip", "examples/cbor_roundtrip.zig" },
+        .{ "bson-roundtrip", "examples/bson_roundtrip.zig" },
+        .{ "msgpack-roundtrip", "examples/msgpack_roundtrip.zig" },
+        .{ "bin-roundtrip", "examples/bin_roundtrip.zig" },
+    }) |example| {
+        const artifact = addNativeExample(b, example[0], example[1], target, optimize, zerde_mod);
+        const install = b.addInstallArtifact(artifact, .{});
+        examples_step.dependOn(&install.step);
+    }
+
     inline for (.{
         .{ "wasm-bin-bridge", "examples/wasm_bin_bridge.zig" },
         .{ "wasm-json-bridge", "examples/wasm_json_bridge.zig" },

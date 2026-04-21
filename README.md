@@ -13,6 +13,15 @@ What you get:
 - owned, arena-backed, and aliased slice parse entrypoints
 - wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing JSON, YAML, MessagePack, and other format payloads inside the module
 
+Current benchmark snapshot on the repo's mixed nested workload:
+
+- about `2.1x` faster than `std.json` on reads and `1.2x` faster on writes
+- about `1.7x` faster than `zig-toml` on reads and `1.1x` faster on writes
+- about `8x` faster than `zbor` on reads and `1.8x` faster on writes
+- about `2x` faster than `zig-yaml` on reads and `2.5x` faster on writes
+- about `9x` faster than `zig-bson` on reads and `3x` to `4x` faster on writes
+- about `4x` to `5x` faster than `bufzilla` on reads and `3x` to `4x` faster on writes
+
 ```zig
 const std = @import("std");
 const zerde = @import("zerde");
@@ -96,14 +105,14 @@ pub fn normalizeJson(allocator: std.mem.Allocator, input: []const u8) !zerde.was
 }
 ```
 
-Browser-oriented wasm examples live in [`examples/`](examples), and you can build them with `zig build examples`.
+Native format examples and browser-oriented wasm examples live in [`examples/`](examples), and you can build them with `zig build examples`.
 
 ## Install
 
 Add `zerde` as a Zig dependency:
 
 ```sh
-zig fetch --save git+https://github.com/leostera/zerde
+zig fetch --save git+https://github.com/leostera/zerde#0.1.0
 ```
 
 Then import it from your `build.zig`:

@@ -29,8 +29,8 @@ Compile the wasm examples:
 zig build examples
 ```
 
-The examples in `examples/` are the quickest way to validate `zerde.wasm`
-against browser-style pointer+length interop.
+The examples in `examples/` cover both the native typed API across formats and
+the `zerde.wasm` browser-style pointer+length interop path.
 
 Run all benchmarks:
 
