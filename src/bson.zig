@@ -119,19 +119,23 @@ pub fn BsonSerializer(comptime Config: type) type {
         }
 
         pub fn emitString(self: *Self, value: []const u8) !void {
-            var payload: std.ArrayListUnmanaged(u8) = .empty;
-            defer payload.deinit(allocator);
-            try appendBsonString(&payload, value);
-            try self.appendScalar(.string, payload.items);
+            if (self.stack_len == 0) return error.BsonRootMustBeDocument;
+            const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
+            var frame = self.current();
+            try frame.bytes.append(allocator, @intFromEnum(BsonType.string));
+            try appendSlotName(&frame.bytes, slot);
+            try appendBsonString(&frame.bytes, value);
         }
 
         pub fn emitBytes(self: *Self, value: []const u8) !void {
-            var payload: std.ArrayListUnmanaged(u8) = .empty;
-            defer payload.deinit(allocator);
-            try appendInt32Payload(&payload, value.len);
-            try payload.append(allocator, 0x00);
-            try payload.appendSlice(allocator, value);
-            try self.appendScalar(.binary, payload.items);
+            if (self.stack_len == 0) return error.BsonRootMustBeDocument;
+            const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
+            var frame = self.current();
+            try frame.bytes.append(allocator, @intFromEnum(BsonType.binary));
+            try appendSlotName(&frame.bytes, slot);
+            try appendInt32Payload(&frame.bytes, value.len);
+            try frame.bytes.append(allocator, 0x00);
+            try frame.bytes.appendSlice(allocator, value);
         }
 
         pub fn emitEnum(self: *Self, comptime _: type, value: anytype) !void {
@@ -222,22 +226,18 @@ pub fn BsonSerializer(comptime Config: type) type {
 
         fn finishFrame(self: *Self, frame: Frame, tag: BsonType) !void {
             var mutable_frame = frame;
-            var encoded: std.ArrayListUnmanaged(u8) = .empty;
-            defer encoded.deinit(allocator);
             defer mutable_frame.bytes.deinit(allocator);
 
-            const total_len = mutable_frame.bytes.items.len + 5;
-            try appendInt32Payload(&encoded, total_len);
-            try encoded.appendSlice(allocator, mutable_frame.bytes.items);
-            try encoded.append(allocator, 0x00);
+            try mutable_frame.bytes.append(allocator, 0x00);
+            writeInt32Prefix(mutable_frame.bytes.items[0..4], mutable_frame.bytes.items.len);
 
             switch (mutable_frame.slot) {
                 .root => {
-                    try self.writer.writeAll(encoded.items);
+                    try self.writer.writeAll(mutable_frame.bytes.items);
                 },
                 else => {
                     if (self.stack_len == 0) return error.InvalidBsonState;
-                    try appendElement(self.current(), tag, mutable_frame.slot, encoded.items);
+                    try appendElement(self.current(), tag, mutable_frame.slot, mutable_frame.bytes.items);
                 },
             }
         }
@@ -250,7 +250,9 @@ pub fn BsonSerializer(comptime Config: type) type {
 
         fn push(self: *Self, frame: Frame) !void {
             if (self.stack_len == self.stack.len) return error.BsonNestingTooDeep;
-            self.stack[self.stack_len] = frame;
+            var owned = frame;
+            try owned.bytes.appendNTimes(allocator, 0x00, 4);
+            self.stack[self.stack_len] = owned;
             self.stack_len += 1;
         }
 
@@ -674,8 +676,13 @@ fn appendBsonString(buffer: *std.ArrayListUnmanaged(u8), value: []const u8) !voi
 fn appendInt32Payload(buffer: *std.ArrayListUnmanaged(u8), value: usize) !void {
     const len = std.math.cast(i32, value) orelse return error.LengthMismatch;
     var bytes: [4]u8 = undefined;
-    appendLittleEndian(&bytes, @as(u32, @bitCast(len)));
+    writeInt32Prefix(&bytes, @as(usize, @intCast(len)));
     try buffer.appendSlice(BsonSerializer(WriteConfig).allocator, &bytes);
+}
+
+fn writeInt32Prefix(dst: []u8, value: usize) void {
+    const len = std.math.cast(i32, value) orelse @panic("bson document length overflow");
+    appendLittleEndian(dst, @as(u32, @bitCast(len)));
 }
 
 fn encodeInteger(buffer: *[8]u8, value: anytype) !struct { tag: BsonType, bytes: []const u8 } {
