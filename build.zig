@@ -83,6 +83,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const bufzilla_mod = b.createModule(.{
+        .root_source_file = b.path("vendor/bufzilla/src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const zig_msgpack_mod = b.createModule(.{
         .root_source_file = b.path("vendor/msgpack-zig/src/msgpack.zig"),
         .target = target,
@@ -315,6 +320,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
+                .{ .name = "bufzilla", .module = bufzilla_mod },
                 .{ .name = "zerde", .module = zerde_mod },
                 .{ .name = "zig_bson", .module = zig_bson_mod },
                 .{ .name = "zig_msgpack", .module = zig_msgpack_mod },
@@ -342,13 +348,16 @@ pub fn build(b: *std.Build) void {
     const run_bench_bson = b.addRunArtifact(bench_exe);
     run_bench_bson.addArg("bson");
 
+    const run_bench_bin = b.addRunArtifact(bench_exe);
+    run_bench_bin.addArg("bin");
+
     const run_bench_msgpack = b.addRunArtifact(bench_exe);
     run_bench_msgpack.addArg("msgpack");
 
     const run_bench_yaml = b.addRunArtifact(bench_exe);
     run_bench_yaml.addArg("yaml");
 
-    const bench_step = b.step("bench", "Run JSON, TOML, CBOR, BSON, MessagePack, and YAML benchmarks");
+    const bench_step = b.step("bench", "Run binary, JSON, TOML, CBOR, BSON, MessagePack, and YAML benchmarks");
     bench_step.dependOn(&run_bench.step);
 
     const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
@@ -362,6 +371,9 @@ pub fn build(b: *std.Build) void {
 
     const bench_bson_step = b.step("bench-bson", "Run BSON benchmark against zig-bson");
     bench_bson_step.dependOn(&run_bench_bson.step);
+
+    const bench_bin_step = b.step("bench-bin", "Run binary benchmark against bufzilla");
+    bench_bin_step.dependOn(&run_bench_bin.step);
 
     const bench_msgpack_step = b.step("bench-msgpack", "Run MessagePack benchmark against msgpack.zig");
     bench_msgpack_step.dependOn(&run_bench_msgpack.step);
