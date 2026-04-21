@@ -87,7 +87,7 @@ pub fn MsgpackSerializer(comptime Config: type) type {
         }
 
         pub fn emitEnum(self: *Self, comptime _: type, value: anytype) !void {
-            try self.emitString(@tagName(value));
+            try self.emitInteger(@intFromEnum(value));
         }
 
         pub fn beginStructSized(self: *Self, comptime T: type, field_count: usize) !void {
