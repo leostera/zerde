@@ -28,6 +28,43 @@ Current scenarios:
 
 This run uses the baseline library's MessagePack output as the shared parse input so both libraries consume the same enum representation.
 
+## 2026-04-21 - 500513c
+
+Changes since previous run:
+
+- definite-length streaming arrays now consume their known element counts directly and close once, instead of paying an item-boundary call for every element
+- MessagePack object reads now resolve map keys straight to typed field indexes on the hot path
+- shared typed field matching now buckets candidate names by length before falling back to exact byte comparison
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | msgpack.zig ns/op | msgpack.zig MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,678 B | 1000000 | 2824.97 | 904.06 | 3280.92 | 778.42 | `zerde` 1.16x faster |
+| medium | 728,807 B | 1000 | 886409.36 | 784.11 | 866966.33 | 801.70 | `msgpack.zig` 1.02x faster |
+| large | 72,267,214 B | 100 | 88089157.45 | 782.38 | 86595374.62 | 795.88 | `msgpack.zig` 1.02x faster |
+
+### Write
+
+| Scenario | zerde Size | msgpack.zig Size | Iterations | zerde ns/op | zerde MiB/s | msgpack.zig ns/op | msgpack.zig MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,678 B | 2,678 B | 1000000 | 1381.92 | 1848.12 | 1356.43 | 1882.84 | `msgpack.zig` 1.02x faster |
+| medium | 728,679 B | 728,807 B | 1000 | 404100.75 | 1719.68 | 416559.07 | 1668.54 | `zerde` 1.03x faster |
+| large | 72,255,694 B | 72,267,214 B | 100 | 40200141.61 | 1714.13 | 41283827.11 | 1669.40 | `zerde` 1.03x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | msgpack.zig Size | Iterations | zerde ns/op | zerde MiB/s | msgpack.zig ns/op | msgpack.zig MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,678 B | 2,678 B | 1000000 | 4228.69 | 1207.91 | 4958.97 | 1030.03 | `zerde` 1.17x faster |
+| medium | 728,679 B | 728,807 B | 1000 | 1291313.37 | 1076.30 | 1291738.82 | 1076.14 | `zerde` 1.00x faster |
+| large | 72,255,694 B | 72,267,214 B | 100 | 127788007.04 | 1078.48 | 128469128.33 | 1072.93 | `zerde` 1.01x faster |
+
+### Notes
+
+- This pass closes most of the remaining MessagePack read gap without changing the wire format or narrowing supported semantics.
+- Parse is now clearly ahead on the small case and within about `2%` on the medium and large cases; write stays ahead on the medium and large cases.
+
 ## 2026-04-21 - 565b6be
 
 Changes since previous run:
