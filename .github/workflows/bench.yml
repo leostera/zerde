@@ -30,6 +30,7 @@ jobs:
       matrix:
         format:
           - json
+          - zon
           - toml
           - cbor
           - bson
