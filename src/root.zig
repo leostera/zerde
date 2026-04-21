@@ -8,6 +8,7 @@ const std = @import("std");
 const bson_impl = @import("bson.zig");
 const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
+const msgpack_impl = @import("msgpack.zig");
 const toml_impl = @import("toml.zig");
 const yaml_impl = @import("yaml.zig");
 const meta = @import("meta.zig");
@@ -19,6 +20,7 @@ pub const SerdeConfig = meta.SerdeConfig;
 pub const bson = bson_impl;
 pub const cbor = cbor_impl;
 pub const json = json_impl;
+pub const msgpack = msgpack_impl;
 pub const toml = toml_impl;
 pub const yaml = yaml_impl;
 
@@ -249,6 +251,35 @@ test "generic yaml entrypoint works" {
     try std.testing.expectEqualStrings(input, out.written());
 }
 
+test "generic msgpack entrypoint works" {
+    const Example = struct {
+        firstName: []const u8,
+        active: bool,
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    const expected = Example{
+        .firstName = "Ada",
+        .active = true,
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try serializeWith(msgpack, &out.writer, expected, .{
+        .rename_all = .snake_case,
+    }, .{});
+
+    const decoded = try parseSliceWith(msgpack, Example, std.testing.allocator, out.written(), .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer typed.free(std.testing.allocator, decoded);
+
+    try std.testing.expectEqualDeep(expected, decoded);
+}
+
 test {
     _ = @import("bson.zig");
     _ = @import("bson_tests");
@@ -258,6 +289,8 @@ test {
     _ = @import("cbor.zig");
     _ = @import("json.zig");
     _ = @import("json_tests");
+    _ = @import("msgpack.zig");
+    _ = @import("msgpack_tests");
     _ = @import("toml.zig");
     _ = @import("toml_tests");
     _ = @import("yaml.zig");

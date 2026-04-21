@@ -216,6 +216,33 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.addImport("cbor_tests", cbor_tests_mod);
 
+    const msgpack_corpus_support_mod = b.createModule(.{
+        .root_source_file = b.path("tests/msgpack_corpus_support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "corpus_support", .module = corpus_support_mod },
+            .{ .name = "zerde", .module = zerde_mod },
+        },
+    });
+    const msgpack_corpus_generated_mod = b.createModule(.{
+        .root_source_file = generateCorpusTests(b, "msgpack", ".msgpack", "msgpack_corpus_support"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "msgpack_corpus_support", .module = msgpack_corpus_support_mod },
+        },
+    });
+    const msgpack_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/msgpack_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "msgpack_corpus_generated", .module = msgpack_corpus_generated_mod },
+        },
+    });
+    tests.root_module.addImport("msgpack_tests", msgpack_tests_mod);
+
     const bson_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/bson_corpus_support.zig"),
         .target = target,

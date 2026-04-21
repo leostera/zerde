@@ -134,7 +134,25 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
 
             // TOML uses two passes so scalars appear before nested tables; JSON stays at one pass.
             const pass_count = comptime SerializerType.structPassCount(T);
-            try serializer.beginStruct(T);
+            if (@hasDecl(SerializerType, "beginStructSized")) {
+                var field_count: usize = 0;
+                inline for (0..pass_count) |pass| {
+                    inline for (info.fields) |field| {
+                        if (field.is_comptime) {
+                            @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
+                        }
+
+                        if (SerializerType.includeStructField(T, field.type, pass)) {
+                            const field_value = @field(value, field.name);
+                            const skip_field = meta.effectiveOmitNullFields(T, cfg) and @typeInfo(field.type) == .optional and field_value == null;
+                            if (!skip_field) field_count += 1;
+                        }
+                    }
+                }
+                try serializer.beginStructSized(T, field_count);
+            } else {
+                try serializer.beginStruct(T);
+            }
             inline for (0..pass_count) |pass| {
                 inline for (info.fields) |field| {
                     if (field.is_comptime) {
