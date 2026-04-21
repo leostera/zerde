@@ -76,7 +76,7 @@ fn generateCorpusTests(
 
         out.writer.print(
             \\test "{s} corpus: {s}" {{
-            \\    try support.expectRoundTripMatches("{s}", @embedFile("{s}"));
+            \\    try support.expectRoundTripMatches("{s}", @embedFile("{f}"));
             \\}}
             \\
         ,
@@ -84,7 +84,7 @@ fn generateCorpusTests(
                 format_name,
                 name,
                 name,
-                b.pathFromRoot(rel_path),
+                std.zig.fmtString(b.pathFromRoot(rel_path)),
             },
         ) catch @panic("failed to write corpus test case");
     }
