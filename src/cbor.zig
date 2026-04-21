@@ -312,6 +312,13 @@ pub fn CborDeserializer(comptime Config: type) type {
             return true;
         }
 
+        pub fn finishKnownLenArray(self: *Self) !void {
+            const frame = self.current();
+            if (frame.kind != .array) return error.InvalidCborState;
+            if (frame.indefinite) return error.InvalidCborState;
+            _ = self.pop();
+        }
+
         pub fn beginObject(self: *Self) !void {
             const header = try self.readResolvedHeader();
             if (header.major != 5) return error.UnexpectedType;

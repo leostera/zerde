@@ -277,6 +277,11 @@ pub fn BinDeserializer(comptime Config: type) type {
             return true;
         }
 
+        pub fn finishKnownLenArray(self: *Self) !void {
+            if (self.array_stack_len == 0) return error.InvalidBinaryState;
+            self.array_stack_len -= 1;
+        }
+
         pub fn beginStructOrdered(self: *Self, comptime T: type) !void {
             _ = self;
             _ = T;

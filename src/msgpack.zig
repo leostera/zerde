@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
 const meta = @import("meta.zig");
 const Number = typed.Number;
+const ObjectFieldLookup = typed.ObjectFieldLookup;
 const StringToken = typed.StringToken;
 const ValueKind = typed.ValueKind;
 
@@ -384,6 +385,12 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             return true;
         }
 
+        pub fn finishKnownLenArray(self: *Self) !void {
+            const frame = self.current();
+            if (frame.kind != .array) return error.InvalidMsgpackState;
+            _ = self.pop();
+        }
+
         pub fn beginObject(self: *Self) !void {
             const len = try self.readContainerLen(.map);
             try self.push(.{
@@ -401,6 +408,22 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             }
             frame.remaining -= 1;
             return try self.readString(allocator);
+        }
+
+        pub fn nextObjectFieldIndex(self: *Self, comptime T: type, comptime cfg: anytype) !ObjectFieldLookup {
+            const frame = self.current();
+            if (frame.kind != .object) return error.InvalidMsgpackState;
+            if (frame.remaining == 0) {
+                _ = self.pop();
+                return .end;
+            }
+
+            frame.remaining -= 1;
+            const key = try self.readBorrowedString();
+            return if (typed.matchStructFieldIndex(T, cfg, key)) |index|
+                .{ .field_index = index }
+            else
+                .unknown;
         }
 
         pub fn skipValue(self: *Self, allocator: Allocator) !void {
@@ -448,6 +471,14 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
                 .bytes = try allocator.dupe(u8, raw),
                 .allocated = true,
             };
+        }
+
+        fn readBorrowedString(self: *Self) ![]const u8 {
+            const len = try self.readRawLenFor(.string);
+            if (self.input.len - self.index < len) return error.UnexpectedEndOfInput;
+            const raw = self.input[self.index .. self.index + len];
+            self.index += len;
+            return raw;
         }
 
         fn readBorrowedStringTagged(self: *Self, tag: u8) ![]const u8 {

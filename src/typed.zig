@@ -36,6 +36,12 @@ pub const Number = union(enum) {
     float: f64,
 };
 
+pub const ObjectFieldLookup = union(enum) {
+    end,
+    field_index: usize,
+    unknown,
+};
+
 /// String token that may either borrow input bytes or own a freshly allocated buffer.
 pub const StringToken = struct {
     bytes: []const u8,
@@ -274,6 +280,8 @@ fn deserializeArray(
     deserializer: anytype,
     comptime cfg: anytype,
 ) anyerror!T {
+    const DeserializerType = @TypeOf(deserializer.*);
+
     if (info.child == u8) {
         // Byte arrays may come from either a format-native bytes token or a plain string token.
         const token = try readByteToken(allocator, deserializer);
@@ -292,11 +300,18 @@ fn deserializeArray(
     var result: T = undefined;
 
     if (known_len) |_| {
-        inline for (0..info.len) |index| {
-            if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
-            result[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+        if (@hasDecl(DeserializerType, "finishKnownLenArray")) {
+            inline for (0..info.len) |index| {
+                result[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+            }
+            try deserializer.finishKnownLenArray();
+        } else {
+            inline for (0..info.len) |index| {
+                if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
+                result[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+            }
+            if (try deserializer.nextArrayItem()) return error.LengthMismatch;
         }
-        if (try deserializer.nextArrayItem()) return error.LengthMismatch;
         return result;
     }
 
@@ -320,9 +335,10 @@ fn deserializePointer(
 ) anyerror!T {
     switch (info.size) {
         .slice => {
+            const DeserializerType = @TypeOf(deserializer.*);
+
             if (info.child == u8) {
                 const token = try deserializer.readString(allocator);
-                const DeserializerType = @TypeOf(deserializer.*);
                 // Aliased slice parses can hand byte and string fields straight back to the caller without copying.
                 if (@hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings()) {
                     return token.bytes;
@@ -341,13 +357,22 @@ fn deserializePointer(
                     for (items[0..initialized]) |item| freeTyped(info.child, allocator, item);
                 }
 
-                for (0..len) |index| {
-                    if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
-                    items[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
-                    initialized = index + 1;
+                if (@hasDecl(DeserializerType, "finishKnownLenArray")) {
+                    for (0..len) |index| {
+                        items[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+                        initialized = index + 1;
+                    }
+                    try deserializer.finishKnownLenArray();
+                } else {
+                    for (0..len) |index| {
+                        if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
+                        items[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+                        initialized = index + 1;
+                    }
+
+                    if (try deserializer.nextArrayItem()) return error.LengthMismatch;
                 }
 
-                if (try deserializer.nextArrayItem()) return error.LengthMismatch;
                 return items;
             }
 
@@ -435,27 +460,53 @@ fn deserializeStruct(
     var seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
     errdefer freePartialStruct(T, allocator, &result, &seen);
 
-    while (try deserializer.nextObjectField(allocator)) |field_name| {
-        defer field_name.deinit(allocator);
-
-        var matched = false;
-
-        inline for (info.fields, 0..) |struct_field, i| {
-            if (struct_field.is_comptime) {
-                @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ struct_field.name);
-            }
-
-            const expected_name = meta.effectiveFieldName(T, struct_field.name, cfg);
-            if (fieldNameMatches(field_name.bytes, expected_name)) {
-                if (seen[i]) return error.DuplicateField;
-                @field(result, struct_field.name) = try deserializeValue(struct_field.type, allocator, deserializer, cfg);
-                seen[i] = true;
-                matched = true;
-                break;
+    if (@hasDecl(DeserializerType, "nextObjectFieldIndex")) {
+        while (true) {
+            switch (try deserializer.nextObjectFieldIndex(T, cfg)) {
+                .end => break,
+                .unknown => {
+                    if (meta.effectiveDenyUnknownFields(T, cfg)) return error.UnknownField;
+                    try deserializer.skipValue(allocator);
+                },
+                .field_index => |field_index| {
+                    inline for (info.fields, 0..) |struct_field, i| {
+                        if (field_index == i) {
+                            if (seen[i]) return error.DuplicateField;
+                            @field(result, struct_field.name) = try deserializeValue(struct_field.type, allocator, deserializer, cfg);
+                            seen[i] = true;
+                        }
+                    }
+                },
             }
         }
 
-        if (!matched) {
+        inline for (info.fields, 0..) |struct_field, i| {
+            if (!seen[i]) {
+                if (struct_field.defaultValue()) |default_value| {
+                    @field(result, struct_field.name) = default_value;
+                } else if (@typeInfo(struct_field.type) == .optional) {
+                    @field(result, struct_field.name) = null;
+                } else {
+                    return error.MissingField;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    while (try deserializer.nextObjectField(allocator)) |field_name| {
+        defer field_name.deinit(allocator);
+
+        if (matchStructFieldIndexInfo(T, info, cfg, field_name.bytes)) |field_index| {
+            inline for (info.fields, 0..) |struct_field, i| {
+                if (field_index == i) {
+                    if (seen[i]) return error.DuplicateField;
+                    @field(result, struct_field.name) = try deserializeValue(struct_field.type, allocator, deserializer, cfg);
+                    seen[i] = true;
+                }
+            }
+        } else {
             // Unknown-field policy also lives at the typed layer so every format behaves the same way.
             if (meta.effectiveDenyUnknownFields(T, cfg)) return error.UnknownField;
             try deserializer.skipValue(allocator);
@@ -478,11 +529,60 @@ fn deserializeStruct(
     return result;
 }
 
-fn fieldNameMatches(actual: []const u8, expected: []const u8) bool {
+pub fn matchStructFieldIndex(comptime T: type, comptime cfg: anytype, actual: []const u8) ?usize {
+    const info = @typeInfo(T);
+    if (info != .@"struct") @compileError("field index matching requires a struct type");
+    return matchStructFieldIndexInfo(T, info.@"struct", cfg, actual);
+}
+
+fn matchStructFieldIndexInfo(
+    comptime T: type,
+    comptime info: std.builtin.Type.Struct,
+    comptime cfg: anytype,
+    actual: []const u8,
+) ?usize {
+    if (actual.len == 0) {
+        inline for (info.fields, 0..) |struct_field, i| {
+            const expected_name = meta.effectiveFieldName(T, struct_field.name, cfg);
+            if (expected_name.len == 0) return i;
+        }
+        return null;
+    }
+
+    inline for (info.fields, 0..) |len_field, len_index| {
+        const len_name = meta.effectiveFieldName(T, len_field.name, cfg);
+        if (isFirstFieldWithNameLen(T, info, cfg, len_index) and actual.len == len_name.len) {
+            inline for (info.fields, 0..) |struct_field, i| {
+                const expected_name = meta.effectiveFieldName(T, struct_field.name, cfg);
+                if (expected_name.len == len_name.len and fieldNameMatchesBucketed(actual, expected_name)) {
+                    return i;
+                }
+            }
+            return null;
+        }
+    }
+
+    return null;
+}
+
+fn isFirstFieldWithNameLen(
+    comptime T: type,
+    comptime info: std.builtin.Type.Struct,
+    comptime cfg: anytype,
+    comptime field_index: usize,
+) bool {
+    const field = info.fields[field_index];
+    const field_name = meta.effectiveFieldName(T, field.name, cfg);
+    inline for (info.fields[0..field_index]) |prior_field| {
+        if (meta.effectiveFieldName(T, prior_field.name, cfg).len == field_name.len) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn fieldNameMatchesBucketed(actual: []const u8, expected: []const u8) bool {
     if (actual.len != expected.len) return false;
-    if (actual.len == 0) return true;
-    if (actual[0] != expected[0]) return false;
-    if (actual[actual.len - 1] != expected[expected.len - 1]) return false;
     return std.mem.eql(u8, actual, expected);
 }
 
