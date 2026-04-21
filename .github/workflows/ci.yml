@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
+  build:
+    name: Build + Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -34,5 +34,30 @@ jobs:
         with:
           version: 0.16.0
 
+      - name: Build native library
+        run: zig build-lib src/root.zig -OReleaseFast
+
+      - name: Build wasm library
+        run: zig build-lib src/root.zig -target wasm32-wasi -OReleaseFast
+
       - name: Run test suite
         run: zig build test
+
+      - name: Build examples
+        run: zig build examples
+
+  bench-build:
+    name: Build Bench Harness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build benchmark harness
+        run: zig build bench-build -Doptimize=ReleaseFast

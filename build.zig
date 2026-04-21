@@ -420,6 +420,9 @@ pub fn build(b: *std.Build) void {
     const run_bench = b.addRunArtifact(bench_exe);
     if (b.args) |args| run_bench.addArgs(args);
 
+    const bench_build_step = b.step("bench-build", "Compile benchmark harness without running it");
+    bench_build_step.dependOn(&bench_exe.step);
+
     const run_bench_json = b.addRunArtifact(bench_exe);
     run_bench_json.addArg("json");
 

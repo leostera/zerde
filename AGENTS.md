@@ -6,6 +6,7 @@ Project conventions for automated changes:
 - run `zig build test` after code changes
 - when touching benchmarked code, run the relevant `zig build bench-* -Doptimize=ReleaseFast` command
 - keep `.github/workflows/ci.yml` and `.github/workflows/bench.yml` aligned with the documented Zig version and repo workflow
+- keep `.github/workflows/ci.yml` validating native lib, wasm lib, tests, examples, and `zig build bench-build`
 - keep `.github/workflows/release.yml` aligned with the documented release process and tag conventions
 - benchmark workflow lives in `bench/README.md`
 - benchmark history lives in `bench/BIN.md`, `bench/BSON.md`, `bench/CBOR.md`, `bench/JSON.md`, `bench/MSGPACK.md`, `bench/TOML.md`, `bench/WASM.md`, and `bench/YAML.md`

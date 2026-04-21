@@ -36,6 +36,7 @@ jobs:
           - msgpack
           - yaml
           - bin
+          - wasm
 
     steps:
       - name: Check out repository
