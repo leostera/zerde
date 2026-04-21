@@ -252,6 +252,79 @@ pub fn parseSliceAliasedWith(
     return parseSliceWith(Format, T, allocator, input, serde_cfg, format_cfg);
 }
 
+const AllocationMetadata = struct {
+    shipwrightTitle: []const u8,
+    colaPowered: bool,
+
+    pub const serde = .{
+        .rename_all = .snake_case,
+    };
+};
+
+const AllocationExample = struct {
+    name: []const u8,
+    bounty: u32,
+    notes: []const u16,
+    metadata: AllocationMetadata,
+    extra: ?[]const u8,
+
+    pub const serde = .{
+        .rename_all = .snake_case,
+    };
+};
+
+const allocation_example_json =
+    \\{"name":"Franky","bounty":394000000,"notes":[3,5,8,13],"metadata":{"shipwright_title":"Iron\nPirate","cola_powered":true},"extra":"BF-37"}
+;
+
+const allocation_example_invalid_json =
+    \\{"name":"Franky","bounty":394000000,"notes":[3,5,8,13],"metadata":{"shipwright_title":"Iron\nPirate","cola_powered":true},"extra":99}
+;
+
+fn expectAllocationExample(value: AllocationExample) !void {
+    try std.testing.expectEqualStrings("Franky", value.name);
+    try std.testing.expectEqual(@as(u32, 394000000), value.bounty);
+    try std.testing.expectEqualSlices(u16, &.{ 3, 5, 8, 13 }, value.notes);
+    try std.testing.expectEqualStrings("Iron\nPirate", value.metadata.shipwrightTitle);
+    try std.testing.expect(value.metadata.colaPowered);
+    try std.testing.expect(value.extra != null);
+    try std.testing.expectEqualStrings("BF-37", value.extra.?);
+}
+
+fn parseSliceAllocationTest(allocator: std.mem.Allocator) !void {
+    const decoded = try parseSlice(json, AllocationExample, allocator, allocation_example_json);
+    defer free(allocator, decoded);
+    try expectAllocationExample(decoded);
+}
+
+fn parseSliceAliasedAllocationTest(allocator: std.mem.Allocator) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const decoded = try parseSliceAliased(json, AllocationExample, arena.allocator(), allocation_example_json);
+    try expectAllocationExample(decoded);
+}
+
+fn parseSliceOwnedAllocationTest(allocator: std.mem.Allocator) !void {
+    var owned = try parseSliceOwned(json, AllocationExample, allocator, allocation_example_json);
+    defer owned.deinit();
+    try expectAllocationExample(owned.value);
+}
+
+fn deserializeAllocationTest(allocator: std.mem.Allocator) !void {
+    var reader: std.Io.Reader = .fixed(allocation_example_json);
+    const decoded = try deserialize(json, AllocationExample, allocator, &reader);
+    defer free(allocator, decoded);
+    try expectAllocationExample(decoded);
+}
+
+fn deserializeOwnedAllocationTest(allocator: std.mem.Allocator) !void {
+    var reader: std.Io.Reader = .fixed(allocation_example_json);
+    var owned = try deserializeOwned(json, AllocationExample, allocator, &reader);
+    defer owned.deinit();
+    try expectAllocationExample(owned.value);
+}
+
 test "generic json entrypoints work" {
     const Example = struct {
         serviceName: []const u8,
@@ -503,6 +576,66 @@ test "parseSliceWithDiagnostics captures json path and location" {
         "InvalidNumber at root.crew[0].bounty (offset 19, line 1, column 20)",
         out.written(),
     );
+}
+
+test "public parse APIs unwind cleanly on allocation failure" {
+    const allocator = std.testing.allocator;
+
+    try std.testing.checkAllAllocationFailures(allocator, parseSliceAllocationTest, .{});
+    try std.testing.checkAllAllocationFailures(allocator, parseSliceAliasedAllocationTest, .{});
+    try std.testing.checkAllAllocationFailures(allocator, parseSliceOwnedAllocationTest, .{});
+    try std.testing.checkAllAllocationFailures(allocator, deserializeAllocationTest, .{});
+    try std.testing.checkAllAllocationFailures(allocator, deserializeOwnedAllocationTest, .{});
+}
+
+test "parseSlice does not leak after invalid input fails late" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.testing.expect(gpa.deinit() == .ok) catch @panic("leak");
+
+    if (parseSlice(json, AllocationExample, gpa.allocator(), allocation_example_invalid_json)) |_| {
+        return error.TestUnexpectedSuccess;
+    } else |_| {}
+}
+
+test "parseSliceAliased does not leak after invalid input fails late" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.testing.expect(gpa.deinit() == .ok) catch @panic("leak");
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    if (parseSliceAliased(json, AllocationExample, arena.allocator(), allocation_example_invalid_json)) |_| {
+        return error.TestUnexpectedSuccess;
+    } else |_| {}
+}
+
+test "parseSliceOwned does not leak after invalid input fails late" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.testing.expect(gpa.deinit() == .ok) catch @panic("leak");
+
+    if (parseSliceOwned(json, AllocationExample, gpa.allocator(), allocation_example_invalid_json)) |_| {
+        return error.TestUnexpectedSuccess;
+    } else |_| {}
+}
+
+test "deserialize does not leak after invalid input fails late" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.testing.expect(gpa.deinit() == .ok) catch @panic("leak");
+
+    var reader: std.Io.Reader = .fixed(allocation_example_invalid_json);
+    if (deserialize(json, AllocationExample, gpa.allocator(), &reader)) |_| {
+        return error.TestUnexpectedSuccess;
+    } else |_| {}
+}
+
+test "deserializeOwned does not leak after invalid input fails late" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.testing.expect(gpa.deinit() == .ok) catch @panic("leak");
+
+    var reader: std.Io.Reader = .fixed(allocation_example_invalid_json);
+    if (deserializeOwned(json, AllocationExample, gpa.allocator(), &reader)) |_| {
+        return error.TestUnexpectedSuccess;
+    } else |_| {}
 }
 
 test {

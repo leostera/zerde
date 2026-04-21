@@ -567,7 +567,8 @@ const Parser = struct {
 
         const start = self.index;
         var builder: std.ArrayList(u8) = .empty;
-        errdefer builder.deinit(allocator);
+        var builder_owned_here = true;
+        errdefer if (builder_owned_here) builder.deinit(allocator);
 
         while (true) {
             const c = self.consume() orelse return error.UnexpectedEndOfInput;
@@ -589,6 +590,7 @@ const Parser = struct {
                 '\\' => {
                     try builder.appendSlice(allocator, self.input[start .. self.index - 1]);
                     try self.appendEscape(allocator, &builder);
+                    builder_owned_here = false;
                     return self.finishEscapedString(allocator, builder);
                 },
                 0...31 => return error.InvalidStringCharacter,

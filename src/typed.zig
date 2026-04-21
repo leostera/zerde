@@ -352,14 +352,15 @@ fn deserializePointer(
     comptime cfg: anytype,
     diagnostics: ?*diagnostic_mod.Diagnostic,
 ) anyerror!T {
+    const DeserializerType = @TypeOf(deserializer.*);
+    const borrowed_strings = @hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings();
+
     switch (info.size) {
         .slice => {
-            const DeserializerType = @TypeOf(deserializer.*);
-
             if (info.child == u8) {
                 const token = try deserializer.readString(allocator);
                 // Aliased slice parses can hand byte and string fields straight back to the caller without copying.
-                if (@hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings()) {
+                if (borrowed_strings) {
                     return token.bytes;
                 }
                 defer token.deinit(allocator);
@@ -373,7 +374,7 @@ fn deserializePointer(
 
                 var initialized: usize = 0;
                 errdefer {
-                    for (items[0..initialized]) |item| freeTyped(info.child, allocator, item);
+                    for (items[0..initialized]) |item| freeTypedPartial(info.child, allocator, item, borrowed_strings);
                 }
 
                 if (@hasDecl(DeserializerType, "finishKnownLenArray")) {
@@ -397,7 +398,7 @@ fn deserializePointer(
 
             var items: std.ArrayList(info.child) = .empty;
             errdefer {
-                for (items.items) |item| freeTyped(info.child, allocator, item);
+                for (items.items) |item| freeTypedPartial(info.child, allocator, item, borrowed_strings);
                 items.deinit(allocator);
             }
 
@@ -454,12 +455,13 @@ fn deserializeStruct(
     if (info.is_tuple) return error.UnsupportedType;
 
     const DeserializerType = @TypeOf(deserializer.*);
+    const borrowed_strings = @hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings();
     if (@hasDecl(DeserializerType, "beginStructOrdered")) {
         try deserializer.beginStructOrdered(T);
 
         var ordered_result: T = undefined;
         var ordered_seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
-        errdefer freePartialStruct(T, allocator, &ordered_result, &ordered_seen);
+        errdefer freePartialStruct(T, allocator, &ordered_result, &ordered_seen, borrowed_strings);
 
         inline for (info.fields, 0..) |struct_field, i| {
             if (struct_field.is_comptime) {
@@ -478,7 +480,7 @@ fn deserializeStruct(
 
     var result: T = undefined;
     var seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
-    errdefer freePartialStruct(T, allocator, &result, &seen);
+    errdefer freePartialStruct(T, allocator, &result, &seen, borrowed_strings);
 
     if (@hasDecl(DeserializerType, "nextObjectFieldIndex")) {
         while (true) {
@@ -635,26 +637,30 @@ fn fieldNameMatchesBucketed(actual: []const u8, expected: []const u8) bool {
 }
 
 fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
+    freeTypedPartial(T, allocator, value, false);
+}
+
+fn freeTypedPartial(comptime T: type, allocator: Allocator, value: T, borrowed_strings: bool) void {
     switch (@typeInfo(T)) {
         .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => {},
         .optional => {
-            if (value) |child| freeTyped(@TypeOf(child), allocator, child);
+            if (value) |child| freeTypedPartial(@TypeOf(child), allocator, child, borrowed_strings);
         },
         .array => |info| {
             if (info.child == u8) return;
-            for (value) |item| freeTyped(info.child, allocator, item);
+            for (value) |item| freeTypedPartial(info.child, allocator, item, borrowed_strings);
         },
         .pointer => |info| switch (info.size) {
             .slice => {
                 if (info.child == u8) {
-                    allocator.free(value);
+                    if (!borrowed_strings) allocator.free(value);
                 } else {
-                    for (value) |item| freeTyped(info.child, allocator, item);
+                    for (value) |item| freeTypedPartial(info.child, allocator, item, borrowed_strings);
                     allocator.free(value);
                 }
             },
             .one => {
-                freeTyped(info.child, allocator, value.*);
+                freeTypedPartial(info.child, allocator, value.*, borrowed_strings);
                 allocator.destroy(value);
             },
             else => {},
@@ -662,7 +668,7 @@ fn freeTyped(comptime T: type, allocator: Allocator, value: T) void {
         .@"struct" => |info| {
             inline for (info.fields) |field| {
                 if (!field.is_comptime) {
-                    freeTyped(field.type, allocator, @field(value, field.name));
+                    freeTypedPartial(field.type, allocator, @field(value, field.name), borrowed_strings);
                 }
             }
         },
@@ -675,8 +681,9 @@ fn freePartialStruct(
     allocator: Allocator,
     result: *T,
     seen: *[@typeInfo(T).@"struct".fields.len]bool,
+    borrowed_strings: bool,
 ) void {
     inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
-        if (seen[i]) freeTyped(field.type, allocator, @field(result.*, field.name));
+        if (seen[i]) freeTypedPartial(field.type, allocator, @field(result.*, field.name), borrowed_strings);
     }
 }
