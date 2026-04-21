@@ -7,7 +7,7 @@ const zerde = @import("zerde");
 
 const Allocator = std.mem.Allocator;
 
-const Scenario = struct {
+pub const Scenario = struct {
     name: []const u8,
     endpoint_count: usize,
     metric_count: usize,
@@ -17,7 +17,7 @@ const Scenario = struct {
     roundtrip_iterations: usize,
 };
 
-const scenarios = [_]Scenario{
+pub const scenarios = [_]Scenario{
     .{ .name = "small", .endpoint_count = 4, .metric_count = 6, .event_count = 8, .parse_iterations = 1_000_000, .write_iterations = 1_000_000, .roundtrip_iterations = 1_000_000 },
     .{ .name = "medium", .endpoint_count = 24, .metric_count = 96, .event_count = 4_500, .parse_iterations = 1_000, .write_iterations = 1_000, .roundtrip_iterations = 1_000 },
     .{ .name = "large", .endpoint_count = 64, .metric_count = 512, .event_count = 450_000, .parse_iterations = 100, .write_iterations = 100, .roundtrip_iterations = 100 },
@@ -137,7 +137,7 @@ const BinEvent = struct {
     samples: [4]u16,
 };
 
-const BinPayload = struct {
+pub const BinPayload = struct {
     service_name: []const u8,
     version: u32,
     healthy: bool,
@@ -152,15 +152,15 @@ const BinPayload = struct {
     sample_windows: [3]u32,
 };
 
-const BenchStats = struct {
+pub const BenchStats = struct {
     iterations: usize,
     mean_ns: f64,
 
-    fn nsPerOp(self: BenchStats) f64 {
+    pub fn nsPerOp(self: BenchStats) f64 {
         return self.mean_ns;
     }
 
-    fn mibPerSec(self: BenchStats, bytes: usize) f64 {
+    pub fn mibPerSec(self: BenchStats, bytes: usize) f64 {
         const seconds = self.mean_ns / std.time.ns_per_s;
         return if (seconds == 0) 0 else bytesToMiB(bytes) / seconds;
     }
@@ -420,7 +420,7 @@ fn benchStatsFromResult(result: zbench.Result) !BenchStats {
     };
 }
 
-fn runZbenchParam(io: std.Io, allocator: Allocator, name: []const u8, benchmark: anytype, iterations: usize) !BenchStats {
+pub fn runZbenchParam(io: std.Io, allocator: Allocator, name: []const u8, benchmark: anytype, iterations: usize) !BenchStats {
     const BenchmarkPtr = @TypeOf(benchmark);
     const pointer_info = @typeInfo(BenchmarkPtr);
     if (pointer_info != .pointer) @compileError("benchmark context must be a pointer");
@@ -442,7 +442,7 @@ fn runZbenchParam(io: std.Io, allocator: Allocator, name: []const u8, benchmark:
     return error.MissingBenchmarkResult;
 }
 
-fn makePayload(allocator: Allocator, scenario: Scenario) !BinPayload {
+pub fn makePayload(allocator: Allocator, scenario: Scenario) !BinPayload {
     const endpoints = try allocator.alloc(BinEndpoint, scenario.endpoint_count);
     errdefer allocator.free(endpoints);
     for (endpoints, 0..) |*endpoint, i| {
@@ -516,13 +516,13 @@ fn makePayload(allocator: Allocator, scenario: Scenario) !BinPayload {
     };
 }
 
-fn freePayload(allocator: Allocator, value: BinPayload) void {
+pub fn freePayload(allocator: Allocator, value: BinPayload) void {
     allocator.free(value.endpoints);
     allocator.free(value.metrics);
     allocator.free(value.events);
 }
 
-fn consumePayload(value: BinPayload) void {
+pub fn consumePayload(value: BinPayload) void {
     std.mem.doNotOptimizeAway(value.version);
     std.mem.doNotOptimizeAway(value.metadata.shard_count);
     std.mem.doNotOptimizeAway(value.endpoints.len);
@@ -735,6 +735,6 @@ fn tagOf(value: bufzilla.Value) std.meta.Tag(bufzilla.Value) {
     return std.meta.activeTag(value);
 }
 
-fn bytesToMiB(bytes: usize) f64 {
+pub fn bytesToMiB(bytes: usize) f64 {
     return @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
 }

@@ -13,6 +13,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/json.zig`: JSON benchmark entrypoint
 - `bench/msgpack.zig`: MessagePack benchmark entrypoint
 - `bench/toml.zig`: TOML benchmark entrypoint
+- `bench/wasm.zig`: WASM helper benchmark entrypoint
 - `bench/yaml.zig`: YAML benchmark entrypoint
 - `bench/common.zig`: shared scenarios, payload builders, and benchmark loops
 - `bench/BIN.md`: running binary benchmark history
@@ -21,6 +22,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/JSON.md`: running JSON benchmark history
 - `bench/MSGPACK.md`: running MessagePack benchmark history
 - `bench/TOML.md`: running TOML benchmark history
+- `bench/WASM.md`: running WASM benchmark history
 - `bench/YAML.md`: running YAML benchmark history
 
 ## Commands
@@ -73,6 +75,12 @@ Run YAML only:
 zig build bench-yaml -Doptimize=ReleaseFast
 ```
 
+Run WASM helper benchmark only:
+
+```sh
+zig build bench-wasm -Doptimize=ReleaseFast
+```
+
 Run the test suite before recording benchmark results:
 
 ```sh
@@ -88,6 +96,7 @@ zig build test
 - BSON compares `zerde` against `zig-bson`
 - MessagePack compares `zerde` against `msgpack.zig`
 - YAML compares `zerde` against `zig-yaml`
+- WASM compares `zerde.wasm` against the equivalent direct `zerde.bin` path to measure helper overhead rather than wire-format speed
 
 The benchmark payloads are intentionally non-trivial and live in `bench/common.zig`.
 The current harness measures parse, write, and roundtrip (`typed -> bytes -> typed`) cost.
@@ -128,6 +137,9 @@ Current harness behavior follows that rule:
 - YAML parse compares `zerde.parseSliceAliased(..., YamlPayload, ...)` against `Yaml.load(...) + Yaml.parse(..., YamlPayload)`, so the baseline's document-load step stays inside the timed region
 - YAML write compares `zerde.serializeWith(..., .{ .omit_null_fields = true }, .{ .indent_width = 4 })` against `zig_yaml.stringify(...)`
 - YAML roundtrip compares `zerde.serializeWith(...) + zerde.parseSliceAliased(...)` against `zig_yaml.stringify(...) + Yaml.load(...) + Yaml.parse(...)`
+- WASM parse compares `zerde.wasm.parse(...)` against `zerde.parseSlice(zerde.bin, ...)`, so both sides own the typed result and operate on the same compact binary bytes
+- WASM write compares `zerde.wasm.serializeOwned(...)` against the equivalent direct `zerde.serialize(zerde.bin, ...)` path with a fresh owned output buffer
+- WASM roundtrip compares `zerde.wasm.serializeOwned(...) + zerde.wasm.parse(...)` against the equivalent direct binary roundtrip path
 
 Roundtrip benchmarks also perform one deep equality check per scenario before timing begins.
 That keeps correctness in the harness without turning the timed region into a struct-comparison benchmark.

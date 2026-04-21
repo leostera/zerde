@@ -212,3 +212,33 @@ test "parseAliased may borrow strings from the wasm buffer" {
     try std.testing.expect(name_ptr >= begin and name_ptr < end);
     try std.testing.expectEqualStrings("Mille Sunny", decoded.name);
 }
+
+test "parseParts entrypoints mirror descriptor entrypoints" {
+    const Example = struct {
+        title: []const u8,
+        code: u32,
+    };
+
+    var encoded = try serializeOwned(std.testing.allocator, Example{
+        .title = "Thousand Sunny",
+        .code = 1000,
+    });
+    defer encoded.deinit();
+
+    const bytes = encoded.bytes();
+
+    const owned = try parseParts(Example, std.testing.allocator, bytes.ptr, bytes.len);
+    defer typed.free(std.testing.allocator, owned);
+    try std.testing.expectEqualStrings("Thousand Sunny", owned.title);
+    try std.testing.expectEqual(@as(u32, 1000), owned.code);
+
+    const aliased = try parsePartsAliased(Example, std.testing.allocator, bytes.ptr, bytes.len);
+    try std.testing.expectEqualStrings("Thousand Sunny", aliased.title);
+    try std.testing.expectEqual(@as(u32, 1000), aliased.code);
+
+    const begin = @intFromPtr(bytes.ptr);
+    const end = begin + bytes.len;
+    const title_ptr = @intFromPtr(aliased.title.ptr);
+
+    try std.testing.expect(title_ptr >= begin and title_ptr < end);
+}

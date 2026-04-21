@@ -7,6 +7,7 @@ const cbor = @import("cbor.zig");
 const json = @import("json.zig");
 const msgpack = @import("msgpack.zig");
 const toml = @import("toml.zig");
+const wasm = @import("wasm.zig");
 const yaml = @import("yaml.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -43,6 +44,10 @@ pub fn main(init: std.process.Init) !void {
         try yaml.run(io, allocator);
         return;
     }
+    if (std.mem.eql(u8, mode, "wasm")) {
+        try wasm.run(io, allocator);
+        return;
+    }
 
     try bin.run(io, allocator);
     try json.run(io, allocator);
@@ -51,4 +56,5 @@ pub fn main(init: std.process.Init) !void {
     try bson.run(io, allocator);
     try msgpack.run(io, allocator);
     try yaml.run(io, allocator);
+    try wasm.run(io, allocator);
 }

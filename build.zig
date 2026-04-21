@@ -357,7 +357,10 @@ pub fn build(b: *std.Build) void {
     const run_bench_yaml = b.addRunArtifact(bench_exe);
     run_bench_yaml.addArg("yaml");
 
-    const bench_step = b.step("bench", "Run binary, JSON, TOML, CBOR, BSON, MessagePack, and YAML benchmarks");
+    const run_bench_wasm = b.addRunArtifact(bench_exe);
+    run_bench_wasm.addArg("wasm");
+
+    const bench_step = b.step("bench", "Run binary, JSON, TOML, CBOR, BSON, MessagePack, YAML, and WASM benchmarks");
     bench_step.dependOn(&run_bench.step);
 
     const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
@@ -380,4 +383,7 @@ pub fn build(b: *std.Build) void {
 
     const bench_yaml_step = b.step("bench-yaml", "Run YAML benchmark against zig-yaml");
     bench_yaml_step.dependOn(&run_bench_yaml.step);
+
+    const bench_wasm_step = b.step("bench-wasm", "Run WASM helper benchmark against the direct binary path");
+    bench_wasm_step.dependOn(&run_bench_wasm.step);
 }
