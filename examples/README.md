@@ -23,6 +23,7 @@ Native examples in this folder:
 - `cbor_roundtrip.zig`: serialize a Zig struct to CBOR and parse it back
 - `bson_roundtrip.zig`: serialize a Zig struct to BSON and parse it back
 - `msgpack_roundtrip.zig`: serialize a Zig struct to MessagePack and parse it back
+- `zon_roundtrip.zig`: serialize a Zig struct to ZON and parse it back
 - `bin_roundtrip.zig`: serialize a Zig struct to `zerde`'s compact binary format and parse it back
 
 WASM examples in this folder export the same host-facing helpers:
@@ -36,5 +37,6 @@ Examples in this folder:
 
 - `wasm_bin_bridge.zig`: serialize a Zig struct for JS and read compact binary back into wasm
 - `wasm_json_bridge.zig`: parse JSON inside wasm and reserialize it to canonical JSON
+- `wasm_zon_bridge.zig`: parse ZON inside wasm and reserialize it to canonical ZON
 - `wasm_yaml_bridge.zig`: parse YAML inside wasm and reserialize it to JSON
 - `wasm_msgpack_bridge.zig`: parse MessagePack inside wasm and reserialize it to JSON

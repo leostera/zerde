@@ -7,16 +7,17 @@ deserializer for that exact combination.
 
 What you get:
 
-- one typed API across JSON, TOML, YAML, CBOR, BSON, MessagePack, and binary
+- one typed API across JSON, ZON, TOML, YAML, CBOR, BSON, MessagePack, and binary
 - fast read and write paths without a required runtime value tree
 - an optional `zerde.Value` tree for transcoding and schema-less tooling
 - per-type and per-call customization for field renames and wire-shape policy
 - owned, arena-backed, and aliased slice parse entrypoints
-- wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing JSON, YAML, MessagePack, and other format payloads inside the module
+- wasm/WASI pointer+length helpers for moving typed values across JS boundaries and parsing JSON, ZON, YAML, MessagePack, and other format payloads inside the module
 
 Current benchmark snapshot on the repo's mixed nested workload:
 
 - about `2.1x` faster than `std.json` on reads and `1.2x` faster on writes
+- about `1.3x` faster than `std.zon` on reads and `1.1x` faster on writes
 - about `1.7x` faster than `zig-toml` on reads and `1.1x` faster on writes
 - about `8x` faster than `zbor` on reads and `1.8x` faster on writes
 - about `2x` faster than `zig-yaml` on reads and `2.5x` faster on writes
@@ -66,6 +67,7 @@ pub fn main() !void {
 | BSON | yes | yes | yes | yes | Typed BSON path |
 | MessagePack | yes | yes | yes | yes | Typed MessagePack path |
 | JSON | yes | yes | yes | yes | Fully typed fast path, benchmarked against `std.json` |
+| ZON | yes | yes | yes | no | Typed ZON path, benchmarked against `std.zon`; slice parse currently owns decoded strings |
 | TOML | yes | yes | yes | yes | Practical TOML subset centered on scalars, arrays, tables, and arrays-of-tables |
 | CBOR | yes | yes | yes | yes | Definite-length writer; read accepts definite and indefinite arrays/maps |
 | YAML | yes | yes | yes | yes | Practical block-YAML subset with block mappings, block sequences, and flow scalar arrays |
@@ -77,7 +79,7 @@ pub fn main() !void {
 The `zerde.wasm` helpers can:
 
 - serialize typed Zig values into wasm-friendly pointer+length buffers
-- parse JSON, YAML, MessagePack, and other supported payloads inside the module
+- parse JSON, ZON, YAML, MessagePack, and other supported payloads inside the module
 - reserialize those typed values back into JSON, binary, or another format before handing bytes back to JS
 
 ```zig
@@ -151,7 +153,7 @@ Then use it like:
 ./zig-out/bin/zerde-transcode --from json --to yaml crew.json
 ```
 
-It currently supports `json`, `toml`, `yaml`, `cbor`, `bson`, and `msgpack`.
+It currently supports `json`, `zon`, `toml`, `yaml`, `cbor`, `bson`, and `msgpack`.
 
 ## Customization
 

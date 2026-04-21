@@ -15,6 +15,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/toml.zig`: TOML benchmark entrypoint
 - `bench/wasm.zig`: WASM helper benchmark entrypoint
 - `bench/yaml.zig`: YAML benchmark entrypoint
+- `bench/zon.zig`: ZON benchmark entrypoint
 - `bench/common.zig`: shared scenarios, payload builders, and benchmark loops
 - `bench/BIN.md`: running binary benchmark history
 - `bench/BSON.md`: running BSON benchmark history
@@ -24,6 +25,7 @@ The current runner uses [`zBench`](https://github.com/hendriknielaender/zBench) 
 - `bench/TOML.md`: running TOML benchmark history
 - `bench/WASM.md`: running WASM benchmark history
 - `bench/YAML.md`: running YAML benchmark history
+- `bench/ZON.md`: running ZON benchmark history
 
 ## Commands
 
@@ -49,6 +51,12 @@ Run TOML only:
 
 ```sh
 zig build bench-toml -Doptimize=ReleaseFast
+```
+
+Run ZON only:
+
+```sh
+zig build bench-zon -Doptimize=ReleaseFast
 ```
 
 Run CBOR only:
@@ -91,6 +99,7 @@ zig build test
 
 - binary compares `zerde` against `bufzilla`
 - JSON compares `zerde` against Zig's `std.json`
+- ZON compares `zerde` against Zig's `std.zon`
 - TOML compares `zerde` against [`sam701/zig-toml`](https://github.com/sam701/zig-toml)
 - CBOR compares `zerde` against `zbor`
 - BSON compares `zerde` against `zig-bson`
@@ -122,6 +131,9 @@ Current harness behavior follows that rule:
 - JSON compares `zerde.parseSliceAliased(..., Payload, ...)` against `std.json.parseFromSliceLeaky(StdPayload, ...)`, so both sides are timed on their typed parse APIs
 - JSON write compares `zerde.serialize(...)` against `std.json.Stringify.value(...)`, so both sides are timed on their typed serialization APIs
 - JSON roundtrip compares `zerde.serialize(...) + zerde.parseSliceAliased(...)` against `std.json.Stringify.value(...) + std.json.parseFromSliceLeaky(...)`
+- ZON parse compares `zerde.parseSlice(zerde.zon, Payload, ...)` against `std.zon.parse.fromSliceAlloc(StdPayload, ...)`
+- ZON write compares `zerde.serialize(zerde.zon, ...)` against `std.zon.stringify.serialize(...)`
+- ZON roundtrip compares `zerde.serialize(zerde.zon, ...) + zerde.parseSlice(zerde.zon, ...)` against `std.zon.stringify.serialize(...) + std.zon.parse.fromSliceAlloc(...)`
 - TOML parse compares `zerde.parseSlice(..., TomlParsePayload, ...)` against `zig_toml.Parser(TomlParsePayload).parseString(...)`
 - TOML write compares `zerde.serialize(...)` against `zig_toml.serialize(...)`
 - TOML roundtrip compares `zerde.serialize(...) + zerde.parseSlice(...)` against `zig_toml.serialize(...) + zig_toml.Parser(...).parseString(...)`
