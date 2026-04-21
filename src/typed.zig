@@ -110,11 +110,7 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
         .pointer => |info| switch (info.size) {
             .slice => {
                 if (info.child == u8) {
-                    if (@hasDecl(SerializerType, "emitBytes")) {
-                        try serializer.emitBytes(value);
-                    } else {
-                        try serializer.emitString(value);
-                    }
+                    try serializer.emitString(value);
                     return;
                 }
 
@@ -270,7 +266,7 @@ fn deserializePointer(
     switch (info.size) {
         .slice => {
             if (info.child == u8) {
-                const token = try readByteToken(allocator, deserializer);
+                const token = try deserializer.readString(allocator);
                 const DeserializerType = @TypeOf(deserializer.*);
                 // Aliased slice parses can hand byte and string fields straight back to the caller without copying.
                 if (@hasDecl(DeserializerType, "borrowStrings") and deserializer.borrowStrings()) {

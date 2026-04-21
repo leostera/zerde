@@ -78,6 +78,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const zig_bson_mod = b.createModule(.{
+        .root_source_file = b.path("vendor/zig-bson/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const zig_yaml_mod = b.createModule(.{
         .root_source_file = b.path("vendor/zig-yaml/src/lib.zig"),
         .target = target,
@@ -252,6 +257,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zerde", .module = zerde_mod },
+                .{ .name = "zig_bson", .module = zig_bson_mod },
                 .{ .name = "zig_toml", .module = zig_toml_dep.module("toml") },
                 .{ .name = "zbor", .module = zbor_dep.module("zbor") },
                 .{ .name = "zbench", .module = zbench_dep.module("zbench") },
@@ -273,10 +279,13 @@ pub fn build(b: *std.Build) void {
     const run_bench_cbor = b.addRunArtifact(bench_exe);
     run_bench_cbor.addArg("cbor");
 
+    const run_bench_bson = b.addRunArtifact(bench_exe);
+    run_bench_bson.addArg("bson");
+
     const run_bench_yaml = b.addRunArtifact(bench_exe);
     run_bench_yaml.addArg("yaml");
 
-    const bench_step = b.step("bench", "Run JSON, TOML, CBOR, and YAML benchmarks");
+    const bench_step = b.step("bench", "Run JSON, TOML, CBOR, BSON, and YAML benchmarks");
     bench_step.dependOn(&run_bench.step);
 
     const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
@@ -287,6 +296,9 @@ pub fn build(b: *std.Build) void {
 
     const bench_cbor_step = b.step("bench-cbor", "Run CBOR benchmark against zbor");
     bench_cbor_step.dependOn(&run_bench_cbor.step);
+
+    const bench_bson_step = b.step("bench-bson", "Run BSON benchmark against zig-bson");
+    bench_bson_step.dependOn(&run_bench_bson.step);
 
     const bench_yaml_step = b.step("bench-yaml", "Run YAML benchmark against zig-yaml");
     bench_yaml_step.dependOn(&run_bench_yaml.step);

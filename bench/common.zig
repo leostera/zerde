@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const zerde = @import("zerde");
+const zig_bson = @import("zig_bson");
 const zig_toml = @import("zig_toml");
 const zig_yaml = @import("zig_yaml");
 const zbench = @import("zbench");
@@ -291,6 +292,64 @@ const StdPayload = struct {
 };
 
 const ZborPayload = StdPayload;
+
+const BsonMetadata = struct {
+    owner_id: i32,
+    shard_count: i32,
+    publicURL: []const u8,
+    trace_salt: []const u8,
+    release_name: ?[]const u8,
+    hot: bool,
+};
+
+const BsonEndpoint = struct {
+    path: []const u8,
+    method: HttpMethod,
+    timeout_ms: i32,
+    retries: ?i32,
+    weights: [4]f32,
+    enabled: bool,
+};
+
+const BsonMetric = struct {
+    name: []const u8,
+    kind: MetricKind,
+    current: i32,
+    peak: i32,
+    ratio: f32,
+    note: ?[]const u8,
+    labels: [3][]const u8,
+};
+
+const BsonEvent = struct {
+    id: i32,
+    code: i32,
+    ok: bool,
+    severity: Severity,
+    route: []const u8,
+    region: Region,
+    duration_micros: i32,
+    cpu_load: f32,
+    signature: []const u8,
+    note: ?[]const u8,
+    flags: [4]bool,
+    samples: [4]i32,
+};
+
+const BsonPayload = struct {
+    serviceName: []const u8,
+    version: i32,
+    healthy: bool,
+    build_number: i32,
+    primary_region: Region,
+    description: ?[]const u8,
+    signature: []const u8,
+    metadata: BsonMetadata,
+    endpoints: []const BsonEndpoint,
+    metrics: []const BsonMetric,
+    events: []const BsonEvent,
+    sample_windows: [3]i32,
+};
 
 const toml_notes = [_][]const u8{
     "steady state",
@@ -640,6 +699,18 @@ const CborScenarioResult = struct {
     roundtrip_zbor: BenchStats,
 };
 
+const BsonScenarioResult = struct {
+    parse_bytes: usize,
+    zerde_write_bytes: usize,
+    zig_bson_write_bytes: usize,
+    parse_zerde: BenchStats,
+    parse_zig_bson: BenchStats,
+    write_zerde: BenchStats,
+    write_zig_bson: BenchStats,
+    roundtrip_zerde: BenchStats,
+    roundtrip_zig_bson: BenchStats,
+};
+
 const YamlScenarioResult = struct {
     parse_bytes: usize,
     zerde_write_bytes: usize,
@@ -656,6 +727,7 @@ pub fn runAll(io: std.Io, allocator: Allocator) !void {
     try runJsonBench(io, allocator);
     try runTomlBench(io, allocator);
     try runCborBench(io, allocator);
+    try runBsonBench(io, allocator);
     try runYamlBench(io, allocator);
 }
 
@@ -1789,6 +1861,283 @@ fn printCborScenarioResult(scenario: Scenario, result: CborScenarioResult) void 
     std.debug.print("\n", .{});
 }
 
+pub fn runBsonBench(io: std.Io, allocator: Allocator) !void {
+    std.debug.print("zerde BSON benchmark vs zig-bson\n", .{});
+    std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
+    std.debug.print("iterations: 1_000_000 / 1_000 / 100\n", .{});
+    std.debug.print("roundtrip: typed value -> bytes -> typed value, with one correctness check before timing\n", .{});
+    std.debug.print("note: parse and roundtrip use a signed-integer/string-signature BSON payload because that is the shared typed subset both libraries support\n\n", .{});
+
+    for (scenarios) |scenario| {
+        const result = try runBsonScenario(io, allocator, scenario);
+        printBsonScenarioResult(scenario, result);
+    }
+
+    std.debug.print("\n", .{});
+}
+
+fn runBsonScenario(io: std.Io, allocator: Allocator, scenario: Scenario) !BsonScenarioResult {
+    const BsonZerdeParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            const value = zerde.parseSliceAliased(zerde.bson, BsonPayload, self.arena.allocator(), self.input) catch @panic("zerde BSON parse failed");
+            consumeBsonPayload(value);
+        }
+    };
+
+    const ZigBsonParse = struct {
+        input: []const u8,
+        arena: std.heap.ArenaAllocator,
+
+        fn init(input: []const u8) @This() {
+            return .{
+                .input = input,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            var bson_reader = zig_bson.reader(self.arena.allocator(), self.input);
+            var owned = bson_reader.readInto(BsonPayload) catch @panic("zig-bson parse failed");
+            defer owned.deinit();
+            consumeBsonPayload(owned.value);
+        }
+    };
+
+    const BsonZerdeSerialize = struct {
+        value: BsonPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: BsonPayload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.bson, &self.out.writer, self.value) catch @panic("zerde BSON serialize failed");
+        }
+    };
+
+    const ZigBsonSerialize = struct {
+        value: BsonPayload,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: BsonPayload) @This() {
+            return .{
+                .value = value,
+                .out = .init(std.heap.page_allocator),
+            };
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            self.out.clearRetainingCapacity();
+            var bson_writer = zig_bson.writer(std.heap.page_allocator, &self.out.writer);
+            defer bson_writer.deinit();
+            bson_writer.writeFrom(self.value) catch @panic("zig-bson serialize failed");
+        }
+    };
+
+    const BsonZerdeRoundTrip = struct {
+        value: BsonPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: BsonPayload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            try zerde.serialize(zerde.bson, &self.out.writer, self.value);
+            const check = try zerde.parseSliceAliased(zerde.bson, BsonPayload, self.arena.allocator(), self.out.written());
+            try assertRoundTripEqual(BsonPayload, self.value, check);
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            zerde.serialize(zerde.bson, &self.out.writer, self.value) catch @panic("zerde BSON roundtrip serialize failed");
+            const parsed = zerde.parseSliceAliased(zerde.bson, BsonPayload, self.arena.allocator(), self.out.written()) catch @panic("zerde BSON roundtrip parse failed");
+            consumeBsonPayload(parsed);
+        }
+    };
+
+    const ZigBsonRoundTrip = struct {
+        value: BsonPayload,
+        arena: std.heap.ArenaAllocator,
+        out: std.Io.Writer.Allocating,
+
+        fn init(value: BsonPayload) !@This() {
+            var self = @This(){
+                .value = value,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .out = .init(std.heap.page_allocator),
+            };
+            errdefer self.deinit();
+
+            var bson_writer = zig_bson.writer(std.heap.page_allocator, &self.out.writer);
+            defer bson_writer.deinit();
+            try bson_writer.writeFrom(self.value);
+
+            var bson_reader = zig_bson.reader(self.arena.allocator(), self.out.written());
+            var check = try bson_reader.readInto(BsonPayload);
+            try assertRoundTripEqual(BsonPayload, self.value, check.value);
+            check.deinit();
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            return self;
+        }
+
+        fn deinit(self: *@This()) void {
+            self.out.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *@This(), _: Allocator) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.out.clearRetainingCapacity();
+            var bson_writer = zig_bson.writer(std.heap.page_allocator, &self.out.writer);
+            defer bson_writer.deinit();
+            bson_writer.writeFrom(self.value) catch @panic("zig-bson roundtrip serialize failed");
+
+            var bson_reader = zig_bson.reader(self.arena.allocator(), self.out.written());
+            var parsed = bson_reader.readInto(BsonPayload) catch @panic("zig-bson roundtrip parse failed");
+            defer parsed.deinit();
+            consumeBsonPayload(parsed.value);
+        }
+    };
+
+    const value = try makeBsonPayload(allocator, scenario);
+    defer freeBsonPayload(allocator, value);
+
+    var zerde_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zerde_out.deinit();
+    try zerde.serialize(zerde.bson, &zerde_out.writer, value);
+    const parse_input = zerde_out.written();
+
+    var zig_bson_out: std.Io.Writer.Allocating = .init(allocator);
+    defer zig_bson_out.deinit();
+    {
+        var bson_writer = zig_bson.writer(allocator, &zig_bson_out.writer);
+        defer bson_writer.deinit();
+        try bson_writer.writeFrom(value);
+    }
+
+    var parse_zerde = BsonZerdeParse.init(parse_input);
+    defer parse_zerde.deinit();
+    var parse_zig_bson = ZigBsonParse.init(parse_input);
+    defer parse_zig_bson.deinit();
+    var write_zerde = BsonZerdeSerialize.init(value);
+    defer write_zerde.deinit();
+    var write_zig_bson = ZigBsonSerialize.init(value);
+    defer write_zig_bson.deinit();
+    var roundtrip_zerde = try BsonZerdeRoundTrip.init(value);
+    defer roundtrip_zerde.deinit();
+    var roundtrip_zig_bson = try ZigBsonRoundTrip.init(value);
+    defer roundtrip_zig_bson.deinit();
+
+    return .{
+        .parse_bytes = parse_input.len,
+        .zerde_write_bytes = zerde_out.written().len,
+        .zig_bson_write_bytes = zig_bson_out.written().len,
+        .parse_zerde = try runZbenchParam(io, allocator, "bson parse zerde", &parse_zerde, scenario.parse_iterations),
+        .parse_zig_bson = try runZbenchParam(io, allocator, "bson parse zig-bson", &parse_zig_bson, scenario.parse_iterations),
+        .write_zerde = try runZbenchParam(io, allocator, "bson write zerde", &write_zerde, scenario.write_iterations),
+        .write_zig_bson = try runZbenchParam(io, allocator, "bson write zig-bson", &write_zig_bson, scenario.write_iterations),
+        .roundtrip_zerde = try runZbenchParam(io, allocator, "bson roundtrip zerde", &roundtrip_zerde, scenario.roundtrip_iterations),
+        .roundtrip_zig_bson = try runZbenchParam(io, allocator, "bson roundtrip zig-bson", &roundtrip_zig_bson, scenario.roundtrip_iterations),
+    };
+}
+
+fn printBsonScenarioResult(scenario: Scenario, result: BsonScenarioResult) void {
+    std.debug.print("{s}\n", .{scenario.name});
+    std.debug.print("  parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
+    });
+    std.debug.print("  zerde write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zerde_write_bytes,
+        bytesToMiB(result.zerde_write_bytes),
+    });
+    std.debug.print("  zig-bson write bytes: {d} ({d:.2} MiB)\n", .{
+        result.zig_bson_write_bytes,
+        bytesToMiB(result.zig_bson_write_bytes),
+    });
+    std.debug.print("  endpoints / metrics / events: {d} / {d} / {d}\n", .{
+        scenario.endpoint_count,
+        scenario.metric_count,
+        scenario.event_count,
+    });
+    std.debug.print("  parse iters: {d}\n", .{result.parse_zerde.iterations});
+    std.debug.print("  write iters: {d}\n", .{result.write_zerde.iterations});
+    std.debug.print("  roundtrip iters: {d}\n", .{result.roundtrip_zerde.iterations});
+    std.debug.print("  parse  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zerde.nsPerOp(),
+        result.parse_zerde.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  parse zig-bson: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.parse_zig_bson.nsPerOp(),
+        result.parse_zig_bson.mibPerSec(result.parse_bytes),
+    });
+    std.debug.print("  write  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zerde.nsPerOp(),
+        result.write_zerde.mibPerSec(result.zerde_write_bytes),
+    });
+    std.debug.print("  write zig-bson: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.write_zig_bson.nsPerOp(),
+        result.write_zig_bson.mibPerSec(result.zig_bson_write_bytes),
+    });
+    std.debug.print("  roundtrip  zerde: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zerde.nsPerOp(),
+        result.roundtrip_zerde.mibPerSec(result.zerde_write_bytes * 2),
+    });
+    std.debug.print("  roundtrip zig-bson: {d:.2} ns/op, {d:.2} MiB/s\n", .{
+        result.roundtrip_zig_bson.nsPerOp(),
+        result.roundtrip_zig_bson.mibPerSec(result.zig_bson_write_bytes * 2),
+    });
+    std.debug.print("\n", .{});
+}
+
 pub fn runYamlBench(io: std.Io, allocator: Allocator) !void {
     std.debug.print("zerde YAML benchmark vs zig-yaml\n", .{});
     std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
@@ -2396,6 +2745,102 @@ fn makeStdPayload(allocator: Allocator, scenario: Scenario) !StdPayload {
     };
 }
 
+fn makeBsonPayload(allocator: Allocator, scenario: Scenario) !BsonPayload {
+    const endpoints = try allocator.alloc(BsonEndpoint, scenario.endpoint_count);
+    errdefer allocator.free(endpoints);
+    for (endpoints, 0..) |*endpoint, i| {
+        endpoint.* = .{
+            .path = endpoint_paths[i % endpoint_paths.len],
+            .method = switch (i % 4) {
+                0 => .GET,
+                1 => .POST,
+                2 => .PATCH,
+                else => .DELETE,
+            },
+            .timeout_ms = @as(i32, @intCast(25 + ((i * 7) % 1500))),
+            .retries = if (i % 3 == 0) null else @as(i32, @intCast((i % 5) + 1)),
+            .weights = weight_templates[i % weight_templates.len],
+            .enabled = (i % 5) != 0,
+        };
+    }
+
+    const metrics = try allocator.alloc(BsonMetric, scenario.metric_count);
+    errdefer allocator.free(metrics);
+    for (metrics, 0..) |*metric, i| {
+        metric.* = .{
+            .name = metric_names[i % metric_names.len],
+            .kind = switch (i % 3) {
+                0 => .counter,
+                1 => .gauge,
+                else => .histogram,
+            },
+            .current = @as(i32, @intCast((i % 40_000))) - 20_000,
+            .peak = @as(i32, @intCast(100_000 + (i % 4_000_000))),
+            .ratio = @as(f32, @floatFromInt(i % 1000)) / 1000.0,
+            .note = optional_notes[i % optional_notes.len],
+            .labels = .{
+                label_pool[i % label_pool.len],
+                label_pool[(i + 1) % label_pool.len],
+                label_pool[(i + 2) % label_pool.len],
+            },
+        };
+    }
+
+    const events = try allocator.alloc(BsonEvent, scenario.event_count);
+    errdefer allocator.free(events);
+    for (events, 0..) |*event, i| {
+        event.* = .{
+            .id = @as(i32, @intCast(10_000 + i)),
+            .code = @as(i32, @intCast((i % 5000))) - 2500,
+            .ok = (i % 11) != 0,
+            .severity = switch (i % 3) {
+                0 => .info,
+                1 => .warn,
+                else => .critical,
+            },
+            .route = event_routes[i % event_routes.len],
+            .region = switch (i % 3) {
+                0 => .us_east_1,
+                1 => .eu_central_1,
+                else => .ap_south_1,
+            },
+            .duration_micros = @as(i32, @intCast(120 + (i % 35_000))),
+            .cpu_load = @as(f32, @floatFromInt(i % 1000)) / 1000.0,
+            .signature = event_signatures[i % event_signatures.len][0..],
+            .note = optional_notes[(i + 1) % optional_notes.len],
+            .flags = flag_templates[i % flag_templates.len],
+            .samples = .{
+                @as(i32, sample_templates[i % sample_templates.len][0]),
+                @as(i32, sample_templates[i % sample_templates.len][1]),
+                @as(i32, sample_templates[i % sample_templates.len][2]),
+                @as(i32, sample_templates[i % sample_templates.len][3]),
+            },
+        };
+    }
+
+    return .{
+        .serviceName = "edge-api",
+        .version = 7,
+        .healthy = true,
+        .build_number = -42,
+        .primary_region = .us_east_1,
+        .description = "critical path release candidate",
+        .signature = payload_signature[0..],
+        .metadata = .{
+            .owner_id = 42,
+            .shard_count = 16,
+            .publicURL = "https://api.example.com/public",
+            .trace_salt = trace_salt[0..],
+            .release_name = "2026.04-hotfix",
+            .hot = true,
+        },
+        .endpoints = endpoints,
+        .metrics = metrics,
+        .events = events,
+        .sample_windows = .{ 60, 300, 900 },
+    };
+}
+
 fn makeTomlPayload(
     comptime endpoint_count: usize,
     comptime metric_count: usize,
@@ -2894,6 +3339,14 @@ fn consumeStdPayload(value: StdPayload) void {
     std.mem.doNotOptimizeAway(value.events.len);
 }
 
+fn consumeBsonPayload(value: BsonPayload) void {
+    std.mem.doNotOptimizeAway(value.version);
+    std.mem.doNotOptimizeAway(value.metadata.shard_count);
+    std.mem.doNotOptimizeAway(value.endpoints.len);
+    std.mem.doNotOptimizeAway(value.metrics.len);
+    std.mem.doNotOptimizeAway(value.events.len);
+}
+
 fn consumeYamlPayload(value: YamlPayload) void {
     std.mem.doNotOptimizeAway(value.voyage_no);
     std.mem.doNotOptimizeAway(value.metadata.deck_count);
@@ -2909,6 +3362,12 @@ fn freePayload(allocator: Allocator, value: Payload) void {
 }
 
 fn freeStdPayload(allocator: Allocator, value: StdPayload) void {
+    allocator.free(value.endpoints);
+    allocator.free(value.metrics);
+    allocator.free(value.events);
+}
+
+fn freeBsonPayload(allocator: Allocator, value: BsonPayload) void {
     allocator.free(value.endpoints);
     allocator.free(value.metrics);
     allocator.free(value.events);

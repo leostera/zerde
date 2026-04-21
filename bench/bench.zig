@@ -1,6 +1,7 @@
 //! Benchmark entrypoint. Dispatches to the format-specific benchmark modules.
 
 const std = @import("std");
+const bson = @import("bson.zig");
 const cbor = @import("cbor.zig");
 const json = @import("json.zig");
 const toml = @import("toml.zig");
@@ -24,6 +25,10 @@ pub fn main(init: std.process.Init) !void {
         try cbor.run(io, allocator);
         return;
     }
+    if (std.mem.eql(u8, mode, "bson")) {
+        try bson.run(io, allocator);
+        return;
+    }
     if (std.mem.eql(u8, mode, "yaml")) {
         try yaml.run(io, allocator);
         return;
@@ -32,5 +37,6 @@ pub fn main(init: std.process.Init) !void {
     try json.run(io, allocator);
     try toml.run(io, allocator);
     try cbor.run(io, allocator);
+    try bson.run(io, allocator);
     try yaml.run(io, allocator);
 }
