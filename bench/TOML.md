@@ -37,6 +37,44 @@ The current large case produces a canonical parse input of about `68.89 MiB`, wi
 
 Runs before `8ba2955` used the older write-only harness, so the new parse numbers are not comparable to those entries.
 
+## 2026-04-21 - 0c7bb78
+
+Changes since previous run:
+
+- added `toml.parseSliceAliased(...)` and `toml.parseSliceAliasedWith(...)`
+- kept `parseSlice(...)` as the owning typed edge, so ordinary typed TOML parse still copies strings into the returned value
+- moved the TOML document index closer to zero-copy by reusing parsed key tokens instead of always duplicating key bytes
+- fixed escaped TOML string builder ownership on the OOM/error path
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 1000000 | 8565.32 | 328.46 | 19050.46 | 147.68 | `zerde` 2.22x faster |
+| medium | 728,766 B | 1000 | 1917786.27 | 362.40 | 3366152.19 | 206.47 | `zerde` 1.76x faster |
+| large | 72,232,635 B | 100 | 191282341.24 | 360.13 | 326877353.38 | 210.74 | `zerde` 1.71x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 3505.67 | 802.51 | 6462.72 | 450.07 | `zerde` 1.84x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 747848.55 | 929.34 | 812701.48 | 876.64 | `zerde` 1.09x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 73405649.54 | 938.43 | 78946558.38 | 894.33 | `zerde` 1.08x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 11938.62 | 471.30 | 24975.90 | 232.92 | `zerde` 2.09x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 2675256.50 | 519.58 | 4237270.04 | 336.28 | `zerde` 1.58x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 265395077.53 | 519.12 | 410244464.56 | 344.21 | `zerde` 1.55x faster |
+
+### Notes
+
+- This pass was about parse memory behavior, not a new TOML wire format or a benchmark-specific shortcut.
+- Medium and large write and roundtrip improved a bit, while parse stayed in roughly the same range as the previous top run.
+
 ## 2026-04-20 - 102c8eb
 
 Changes since previous run:
