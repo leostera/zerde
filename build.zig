@@ -114,6 +114,33 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const bin_corpus_support_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bin_corpus_support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "corpus_support", .module = corpus_support_mod },
+            .{ .name = "zerde", .module = zerde_mod },
+        },
+    });
+    const bin_corpus_generated_mod = b.createModule(.{
+        .root_source_file = generateCorpusTests(b, "bin", ".bin", "bin_corpus_support"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bin_corpus_support", .module = bin_corpus_support_mod },
+        },
+    });
+    const bin_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bin_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bin_corpus_generated", .module = bin_corpus_generated_mod },
+        },
+    });
+    tests.root_module.addImport("bin_tests", bin_tests_mod);
+
     const json_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/json_corpus_support.zig"),
         .target = target,

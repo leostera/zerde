@@ -72,10 +72,19 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
         .int, .comptime_int => try serializer.emitInteger(value),
         .float, .comptime_float => try serializer.emitFloat(value),
         .optional => {
-            if (value) |child| {
-                try serializeValue(serializer, child, cfg);
+            if (@hasDecl(SerializerType, "beginOptional")) {
+                if (value) |child| {
+                    try serializer.beginOptional(true);
+                    try serializeValue(serializer, child, cfg);
+                } else {
+                    try serializer.beginOptional(false);
+                }
             } else {
-                try serializer.emitNull();
+                if (value) |child| {
+                    try serializeValue(serializer, child, cfg);
+                } else {
+                    try serializer.emitNull();
+                }
             }
         },
         .@"enum" => {
@@ -184,15 +193,26 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
 }
 
 fn deserializeValue(comptime T: type, allocator: Allocator, deserializer: anytype, comptime cfg: anytype) anyerror!T {
+    const DeserializerType = @TypeOf(deserializer.*);
     return switch (@typeInfo(T)) {
         .bool => try deserializer.readBool(),
         // Formats parse numbers once into a common token; the typed layer is responsible for exact casts.
-        .int, .comptime_int => decodeIntNumber(T, try deserializer.readNumber()),
-        .float, .comptime_float => decodeFloatNumber(T, try deserializer.readNumber()),
+        .int, .comptime_int => if (@hasDecl(DeserializerType, "readInt"))
+            try deserializer.readInt(T)
+        else
+            decodeIntNumber(T, try deserializer.readNumber()),
+        .float, .comptime_float => if (@hasDecl(DeserializerType, "readFloat"))
+            try deserializer.readFloat(T)
+        else
+            decodeFloatNumber(T, try deserializer.readNumber()),
         .optional => |info| blk: {
-            if (try deserializer.peekKind() == .null) {
-                try deserializer.readNull();
-                break :blk null;
+            if (@hasDecl(DeserializerType, "readOptionalPresent")) {
+                if (!try deserializer.readOptionalPresent()) break :blk null;
+            } else {
+                if (try deserializer.peekKind() == .null) {
+                    try deserializer.readNull();
+                    break :blk null;
+                }
             }
             break :blk try deserializeValue(info.child, allocator, deserializer, cfg);
         },
@@ -223,6 +243,11 @@ fn decodeFloatNumber(comptime T: type, number: Number) Error!T {
 }
 
 fn decodeEnumValue(comptime T: type, allocator: Allocator, deserializer: anytype) anyerror!T {
+    const DeserializerType = @TypeOf(deserializer.*);
+    if (@hasDecl(DeserializerType, "readEnumTag")) {
+        return try deserializer.readEnumTag(T);
+    }
+
     return switch (try deserializer.peekKind()) {
         .string => blk: {
             const token = try deserializer.readString(allocator);
@@ -320,6 +345,9 @@ fn deserializePointer(
 
 fn readByteToken(allocator: Allocator, deserializer: anytype) anyerror!StringToken {
     const DeserializerType = @TypeOf(deserializer.*);
+    if (@hasDecl(DeserializerType, "readByteToken")) {
+        return try deserializer.readByteToken(allocator);
+    }
     if (@hasDecl(DeserializerType, "readBytes")) {
         return switch (try deserializer.peekKind()) {
             .bytes => try deserializer.readBytes(allocator),
@@ -338,6 +366,27 @@ fn deserializeStruct(
     comptime cfg: anytype,
 ) anyerror!T {
     if (info.is_tuple) return error.UnsupportedType;
+
+    const DeserializerType = @TypeOf(deserializer.*);
+    if (@hasDecl(DeserializerType, "beginStructOrdered")) {
+        try deserializer.beginStructOrdered(T);
+
+        var ordered_result: T = undefined;
+        var ordered_seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
+        errdefer freePartialStruct(T, allocator, &ordered_result, &ordered_seen);
+
+        inline for (info.fields, 0..) |struct_field, i| {
+            if (struct_field.is_comptime) {
+                @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ struct_field.name);
+            }
+
+            @field(ordered_result, struct_field.name) = try deserializeValue(struct_field.type, allocator, deserializer, cfg);
+            ordered_seen[i] = true;
+        }
+
+        if (@hasDecl(DeserializerType, "endStructOrdered")) try deserializer.endStructOrdered(T);
+        return ordered_result;
+    }
 
     try deserializer.beginObject();
 

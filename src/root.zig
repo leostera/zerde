@@ -5,6 +5,7 @@
 //! specializes the read or write path for that exact combination.
 
 const std = @import("std");
+const bin_impl = @import("bin.zig");
 const bson_impl = @import("bson.zig");
 const cbor_impl = @import("cbor.zig");
 const json_impl = @import("json.zig");
@@ -17,6 +18,7 @@ const typed = @import("typed.zig");
 pub const FieldCase = meta.FieldCase;
 pub const SerdeConfig = meta.SerdeConfig;
 
+pub const bin = bin_impl;
 pub const bson = bson_impl;
 pub const cbor = cbor_impl;
 pub const json = json_impl;
@@ -141,6 +143,29 @@ test "generic json entrypoints work" {
         "{\"service_name\":\"api\",\"port\":8080}",
         out.written(),
     );
+}
+
+test "generic binary entrypoint works" {
+    const Example = struct {
+        first_name: []const u8,
+        active: bool,
+        samples: []const u16,
+    };
+
+    const expected = Example{
+        .first_name = "Luffy",
+        .active = true,
+        .samples = &.{ 3, 5, 8 },
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try serialize(bin, &out.writer, expected);
+
+    const decoded = try parseSliceWith(bin, Example, std.testing.allocator, out.written(), .{}, .{});
+    defer typed.free(std.testing.allocator, decoded);
+
+    try std.testing.expectEqualDeep(expected, decoded);
 }
 
 test "generic toml entrypoint works" {
@@ -281,6 +306,8 @@ test "generic msgpack entrypoint works" {
 }
 
 test {
+    _ = @import("bin.zig");
+    _ = @import("bin_tests");
     _ = @import("bson.zig");
     _ = @import("bson_tests");
     _ = @import("cbor_tests");
