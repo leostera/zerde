@@ -1,0 +1,16 @@
+.{
+    .name = .bufzilla,
+    .fingerprint = 0xd06d6ca25e9d4e81,
+    .version = "0.3.0",
+    .minimum_zig_version = "0.15.2",
+
+    .dependencies = .{},
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE.md",
+        "README.md",
+    },
+}

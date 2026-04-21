@@ -1,0 +1,74 @@
+# v0.3.2
+
+### Format Improvements
+- Change signed varint encoding to signed-magnitude via `varIntSignedPositive` / `varIntSignedNegative` tags (replaces the need for ZigZag encoding).
+- Add compact tags for very small values:
+  - `smallIntPositive` / `smallIntNegative` (inline magnitude 0..7 in tag byte)
+  - `smallUint` (inline unsigned 0..7 in tag byte)
+  - `smallBytes` (inline length 0..7 in tag byte)
+- Add `typedArray` for packed numeric vectors.
+- Add native `f16` float value encoding.
+
+### Safety
+- Fix `Reader.readPath` / `Reader.readPaths` object size limit enforcement when encountering non-byte keys.
+- Refactor code to reduce duplication.
+
+# v0.3.1
+
+- Added `Reader.readPath` for fast path-based queries on encoded data using Javascript-style property access: `"name"`, `"address.city"`, `"items[0]"`, `"users[5].scores[0]"`.
+- Added `Reader.readPaths` for efficiently reading a list of paths in a single pass.
+- Added `Writer.applyUpdates` for efficiently applying a changeset of updates to an existing encoded buffer in a single pass.
+
+### Improvements
+- Refactored and simplified logic in `Reader.zig`
+
+# v0.3.0
+
+- Upgrade to Zig 0.15.2
+- `Writer` now accepts a `*std.Io.Writer` instead of an allocator. This enables:
+  - Writing to dynamically growing buffers via `std.Io.Writer.Allocating`
+  - Writing to fixed buffers via `std.Io.Writer.fixed()` (zero allocation)
+  - Streaming directly to files, sockets, or any custom writer
+- `Inspect` now accepts a `*std.Io.Writer` instead of the deprecated `std.io.AnyWriter`.
+- Removed `Writer.deinit()`, `Writer.bytes()`, `Writer.len()`, `Writer.toOwnedSlice()` in favor of `std.Io.Writer`.
+
+### Safety
+- Added configurable `ReadLimits` with the following options:
+  - `max_depth`: maximum nesting depth for containers
+  - `max_bytes_length`: maximum string/binary blob size
+  - `max_array_length`: maximum array element count
+  - `max_object_size`: maximum object key-value pair count
+- New errors: `MaxDepthExceeded`, `BytesTooLong`, `ArrayTooLarge`, `ObjectTooLarge`.
+- `Inspect.printValue` now returns `NonFiniteFloat` error for NaN and Infinity float value.
+
+### Benchmarks
+- A benchmark suite has been added (mostly ported from [zig-msgpack](https://github.com/zigcc/zig-msgpack)).
+
+### Bugfixes and Optimizations
+- Fix integer overflow in `Reader` bounds checks that could bypass validation with malicious length values.
+- Fix `Reader` depth underflow when encountering `containerEnd` at depth 0.
+- Fix `Reader` float decoding to use little-endian byte order always.
+- Fix `Inspect` JSON output to escape all control characters (0x00-0x1F).
+- Fix `encodeVarInt` computing wrong size on big-endian machines.
+- `Inspect` now returns `error.InvalidUtf8` for non-UTF-8 byte sequences instead of producing invalid JSON.
+- Fix integer overflow in `Writer.write` when writing extremely large integers.
+- Fix `Writer.writeAny` silently dropping pointer-to-array values like `&[_]u8{1,2,3}` (data loss).
+- Optimize: pre-compute key field for struct serialization. 
+
+# v0.2.1
+- Compatible with Zig 0.14.1
+- Fix an issue in `build.zig` preventing compilation in macOS hosts.
+
+# v0.2.0
+
+- Upgrade to Zig 0.14
+- Simple variable length integer encoding (strictly better space efficiency) by prefixing length in the tag byte.
+- Use ZigZag algorithm for efficiently encoding negative variable integers.
+- Rename `string` type to `bytes` because a string is just an array of bytes. Also makes it clear that the type is meant for arbitrary binary values, not just strings. We don't want multiple "bytes" types like in MessagePack.
+- `bool` is now stored directly inside it's tag, saving 1 byte per bool.
+- Change runtime `error.UnsupportedType`s to compile errors where possible.
+- Rename to `bufzilla` because the old name was similar to Z-buffers (term in 3-D graphics programming).
+
+# v0.1.0
+
+Initial Release
