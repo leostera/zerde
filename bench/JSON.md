@@ -29,6 +29,43 @@ The current large case produces a JSON document of about `107.58 MiB`.
 
 Runs before `8a3a0a9` used the older simpler payload, so they are not directly comparable to the newer mixed-payload runs.
 
+## 2026-04-21 - ced89d0
+
+Changes since previous run:
+
+- reran the JSON benchmark on current `HEAD` after the parse-path intermediate string copy removal work landed in other backends
+- no JSON-specific serializer or deserializer logic changed in this commit
+- this entry refreshes the JSON baseline for the current tree
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 1000000 | 6960.21 | 532.95 | 13179.55 | 281.51 | `zerde` 1.89x faster |
+| medium | 1,139,497 B | 1000 | 2214637.38 | 490.75 | 3883109.63 | 279.74 | `zerde` 1.75x faster |
+| large | 112,803,589 B | 100 | 221890132.90 | 484.83 | 382975143.81 | 280.90 | `zerde` 1.73x faster |
+
+### Write
+
+| Scenario | zerde Size | std.json Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 4,289 B | 1000000 | 4989.50 | 743.39 | 5749.57 | 711.62 | `zerde` 1.15x faster |
+| medium | 1,139,497 B | 1,202,217 B | 1000 | 1417287.86 | 766.84 | 1657872.43 | 691.24 | `zerde` 1.17x faster |
+| large | 112,803,589 B | 118,794,235 B | 100 | 140076900.40 | 767.99 | 163364282.92 | 693.49 | `zerde` 1.17x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | std.json Size | Iterations | zerde ns/op | zerde MiB/s | std.json ns/op | std.json MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 3,889 B | 4,289 B | 1000000 | 11988.20 | 618.14 | 19358.46 | 422.31 | `zerde` 1.61x faster |
+| medium | 1,139,497 B | 1,202,217 B | 1000 | 3671194.40 | 592.06 | 5643909.37 | 406.16 | `zerde` 1.54x faster |
+| large | 112,803,589 B | 118,794,235 B | 100 | 359774314.60 | 598.03 | 549229499.99 | 412.55 | `zerde` 1.53x faster |
+
+### Notes
+
+- `std.json` still produces a larger document on this workload, so write and roundtrip throughput use per-library byte counts.
+- This run is slower than the previous JSON-only snapshot, but `zerde` still stays clearly ahead on parse, write, and roundtrip in all three scenarios.
+
 ## 2026-04-20 - b9b03f2
 
 Changes since previous run:

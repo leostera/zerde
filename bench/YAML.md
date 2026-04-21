@@ -28,6 +28,43 @@ Current scenarios:
 
 The current large case produces a canonical YAML parse input of about `118.01 MiB`, with write outputs of about `126.45 MiB` for `zerde` and `118.01 MiB` for `zig-yaml`.
 
+## 2026-04-21 - ced89d0
+
+Changes since previous run:
+
+- reran the YAML benchmark on current `HEAD` after the parse-path intermediate string copy removal work landed in other backends
+- no YAML-specific serializer, deserializer, or workload changes landed in this commit
+- this entry refreshes the YAML baseline for the current tree
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-yaml ns/op | zig-yaml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 4,196 B | 1000000 | 15721.25 | 254.54 | 31142.40 | 128.49 | `zerde` 1.98x faster |
+| medium | 1,250,463 B | 1000 | 4823705.46 | 247.22 | 9409578.22 | 126.74 | `zerde` 1.95x faster |
+| large | 123,747,473 B | 100 | 493036764.21 | 239.36 | 979227316.26 | 120.52 | `zerde` 1.99x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-yaml Size | Iterations | zerde ns/op | zerde MiB/s | zig-yaml ns/op | zig-yaml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 4,670 B | 4,196 B | 1000000 | 6000.50 | 742.21 | 17373.40 | 230.33 | `zerde` 2.90x faster |
+| medium | 1,343,451 B | 1,250,463 B | 1000 | 1500090.58 | 854.09 | 3757412.70 | 317.38 | `zerde` 2.50x faster |
+| large | 132,592,435 B | 123,747,473 B | 100 | 147209265.01 | 858.98 | 374259243.73 | 315.33 | `zerde` 2.54x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-yaml Size | Iterations | zerde ns/op | zerde MiB/s | zig-yaml ns/op | zig-yaml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 4,670 B | 4,196 B | 1000000 | 21961.66 | 405.58 | 49136.01 | 162.88 | `zerde` 2.24x faster |
+| medium | 1,343,451 B | 1,250,463 B | 1000 | 6416305.18 | 399.36 | 13381528.82 | 178.24 | `zerde` 2.09x faster |
+| large | 132,592,435 B | 123,747,473 B | 100 | 628870915.84 | 402.15 | 1379585104.58 | 171.09 | `zerde` 2.19x faster |
+
+### Notes
+
+- YAML stays in the same performance band as the previous recorded run, with `zerde` ahead on parse, write, and roundtrip throughout.
+- `zerde` still emits a larger YAML document than the baseline on this workload and still wins comfortably on write throughput.
+
 ## 2026-04-20 - 2fa5c8e
 
 Changes since previous run:

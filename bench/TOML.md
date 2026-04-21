@@ -37,6 +37,43 @@ The current large case produces a canonical parse input of about `68.89 MiB`, wi
 
 Runs before `8ba2955` used the older write-only harness, so the new parse numbers are not comparable to those entries.
 
+## 2026-04-21 - ced89d0
+
+Changes since previous run:
+
+- reran the TOML benchmark on current `HEAD` after the parse-path intermediate string copy removal work landed in other backends
+- no TOML-specific wire-format or typed-path changes landed in this commit
+- this entry refreshes the TOML baseline for the current tree
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 1000000 | 8597.76 | 327.22 | 18975.49 | 148.26 | `zerde` 2.21x faster |
+| medium | 728,766 B | 1000 | 1998805.26 | 347.71 | 3297963.75 | 210.74 | `zerde` 1.65x faster |
+| large | 72,232,635 B | 100 | 198663487.48 | 346.75 | 322771161.61 | 213.42 | `zerde` 1.62x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 3541.28 | 794.44 | 6386.07 | 455.48 | `zerde` 1.80x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 742608.72 | 935.90 | 805043.25 | 884.98 | `zerde` 1.08x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 72856941.22 | 945.50 | 78841747.45 | 895.52 | `zerde` 1.08x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-toml Size | Iterations | zerde ns/op | zerde MiB/s | zig-toml ns/op | zig-toml MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 2,950 B | 3,050 B | 1000000 | 12017.71 | 468.20 | 24888.75 | 233.74 | `zerde` 2.07x faster |
+| medium | 728,766 B | 747,054 B | 1000 | 2745689.25 | 506.25 | 4167973.60 | 341.87 | `zerde` 1.52x faster |
+| large | 72,232,635 B | 74,033,835 B | 100 | 270595018.74 | 509.15 | 404067933.73 | 349.47 | `zerde` 1.49x faster |
+
+### Notes
+
+- Results stayed close to the previous TOML run, which is what we want from a non-TOML-specific parser cleanup elsewhere in the codebase.
+- `zerde` remains ahead on parse, write, and roundtrip in all three scenarios.
+
 ## 2026-04-21 - 0c7bb78
 
 Changes since previous run:

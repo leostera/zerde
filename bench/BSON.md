@@ -28,6 +28,43 @@ Current scenarios:
 
 This run uses a signed-integer and string-signature payload because that is the shared typed subset both libraries support cleanly.
 
+## 2026-04-21 - ced89d0
+
+Changes since previous run:
+
+- reran the BSON benchmark on current `HEAD` after the parse-path intermediate string copy removal work landed in other binary backends
+- no BSON-specific serializer or deserializer changes landed in this commit
+- this entry refreshes the BSON baseline for the current tree
+
+### Parse
+
+| Scenario | Parse Size | Iterations | zerde ns/op | zerde MiB/s | zig-bson ns/op | zig-bson MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 4,210 B | 1000000 | 2738.99 | 1465.86 | 15522.30 | 258.66 | `zerde` 5.67x faster |
+| medium | 1,198,550 B | 1000 | 833628.16 | 1371.15 | 7079321.30 | 161.46 | `zerde` 8.49x faster |
+| large | 118,617,999 B | 100 | 83137194.55 | 1360.68 | 880919890.43 | 128.41 | `zerde` 10.60x faster |
+
+### Write
+
+| Scenario | zerde Size | zig-bson Size | Iterations | zerde ns/op | zerde MiB/s | zig-bson ns/op | zig-bson MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 4,210 B | 4,210 B | 1000000 | 8329.64 | 482.01 | 36153.72 | 111.05 | `zerde` 4.34x faster |
+| medium | 1,198,550 B | 1,198,550 B | 1000 | 2084018.40 | 548.47 | 6580587.45 | 173.70 | `zerde` 3.16x faster |
+| large | 118,617,999 B | 118,617,999 B | 100 | 241016454.99 | 469.36 | 741682658.72 | 152.52 | `zerde` 3.08x faster |
+
+### Roundtrip
+
+| Scenario | zerde Size | zig-bson Size | Iterations | zerde ns/op | zerde MiB/s | zig-bson ns/op | zig-bson MiB/s | Relative |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| small | 4,210 B | 4,210 B | 1000000 | 11375.14 | 705.92 | 58730.76 | 136.72 | `zerde` 5.16x faster |
+| medium | 1,198,550 B | 1,198,550 B | 1000 | 2864707.79 | 798.01 | 14374452.91 | 159.04 | `zerde` 5.02x faster |
+| large | 118,617,999 B | 118,617,999 B | 100 | 321414933.71 | 703.91 | 1546148385.86 | 146.33 | `zerde` 4.81x faster |
+
+### Notes
+
+- BSON remains one of the strongest baseline wins in the package even on a rerun with no BSON-specific code changes.
+- Large write regressed from the last BSON-focused optimization run, but `zerde` still stays clearly ahead on parse, write, and roundtrip.
+
 ## 2026-04-21 - 352166c
 
 Changes since previous run:
