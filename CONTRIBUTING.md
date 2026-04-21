@@ -56,6 +56,7 @@ That file also defines benchmark fairness policy: time the full public usage pat
 The benchmark runner itself is built on `zBench`.
 GitHub Actions mirrors this setup with `.github/workflows/ci.yml` for `zig build test`
 and `.github/workflows/bench.yml` for benchmark runs on `main` and manual dispatches.
+Tagged commits on `main` are published through `.github/workflows/release.yml`.
 
 ## Parse Diagnostics
 
@@ -94,3 +95,14 @@ Examples:
 - update the relevant docs when workflow or capabilities change
 - keep corpus fixtures and corpus support code aligned when adding new roundtrip suites
 - keep `AGENTS.md` current when repo conventions or contributor workflow change
+
+## Releases
+
+Cut releases from `main` with an annotated tag:
+
+```sh
+git tag -a 0.1.0 -m "0.1.0"
+git push origin main --follow-tags
+```
+
+The release workflow only publishes tags whose commit is reachable from `main`.
