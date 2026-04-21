@@ -26,6 +26,19 @@ pub const msgpack = msgpack_impl;
 pub const toml = toml_impl;
 pub const yaml = yaml_impl;
 
+/// Arena-backed parsed value that can be released in one call.
+pub fn Owned(comptime T: type) type {
+    return struct {
+        arena: std.heap.ArenaAllocator,
+        value: T,
+
+        pub fn deinit(self: *@This()) void {
+            self.arena.deinit();
+            self.* = undefined;
+        }
+    };
+}
+
 /// Recursively frees values produced by the owning parse paths.
 pub fn free(allocator: std.mem.Allocator, value: anytype) void {
     typed.free(allocator, value);
@@ -55,6 +68,11 @@ pub fn deserialize(comptime Format: type, comptime T: type, allocator: std.mem.A
     return deserializeWith(Format, T, allocator, reader, .{}, .{});
 }
 
+/// Deserializes `T` into an internal arena so callers can release the full result in one call.
+pub fn deserializeOwned(comptime Format: type, comptime T: type, backing_allocator: std.mem.Allocator, reader: *std.Io.Reader) !Owned(T) {
+    return deserializeOwnedWith(Format, T, backing_allocator, reader, .{}, .{});
+}
+
 /// Deserializes `T` from a reader with separate typed-layer and format-layer configuration.
 pub fn deserializeWith(
     comptime Format: type,
@@ -75,9 +93,32 @@ pub fn deserializeWith(
     return value;
 }
 
+/// Deserializes `T` with separate typed-layer and format-layer configuration into an internal arena.
+pub fn deserializeOwnedWith(
+    comptime Format: type,
+    comptime T: type,
+    backing_allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !Owned(T) {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    errdefer arena.deinit();
+    const value = try deserializeWith(Format, T, arena.allocator(), reader, serde_cfg, format_cfg);
+    return .{
+        .arena = arena,
+        .value = value,
+    };
+}
+
 /// Parses `T` from an in-memory slice using the owning slice path.
 pub fn parseSlice(comptime Format: type, comptime T: type, allocator: std.mem.Allocator, input: []const u8) !T {
     return parseSliceWith(Format, T, allocator, input, .{}, .{});
+}
+
+/// Parses `T` into an internal arena so callers can release the full result in one call.
+pub fn parseSliceOwned(comptime Format: type, comptime T: type, backing_allocator: std.mem.Allocator, input: []const u8) !Owned(T) {
+    return parseSliceOwnedWith(Format, T, backing_allocator, input, .{}, .{});
 }
 
 /// Parses from a stable input slice and may alias unescaped strings directly into that slice.
@@ -103,6 +144,24 @@ pub fn parseSliceWith(
     const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
     if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
     return value;
+}
+
+/// Parses `T` with separate typed-layer and format-layer configuration into an internal arena.
+pub fn parseSliceOwnedWith(
+    comptime Format: type,
+    comptime T: type,
+    backing_allocator: std.mem.Allocator,
+    input: []const u8,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !Owned(T) {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    errdefer arena.deinit();
+    const value = try parseSliceWith(Format, T, arena.allocator(), input, serde_cfg, format_cfg);
+    return .{
+        .arena = arena,
+        .value = value,
+    };
 }
 
 /// Uses a format-specific aliased-slice fast path when the format provides one.
@@ -143,6 +202,40 @@ test "generic json entrypoints work" {
         "{\"service_name\":\"api\",\"port\":8080}",
         out.written(),
     );
+}
+
+test "parseSliceOwned frees with one arena deinit" {
+    const CrewMate = struct {
+        name: []const u8,
+        bounty: u32,
+    };
+
+    var owned = try parseSliceOwned(json, CrewMate, std.testing.allocator, "{\"name\":\"Sanji\",\"bounty\":330000000}");
+    defer owned.deinit();
+
+    try std.testing.expectEqualStrings("Sanji", owned.value.name);
+    try std.testing.expectEqual(@as(u32, 330000000), owned.value.bounty);
+}
+
+test "deserializeOwned frees with one arena deinit" {
+    const CrewMate = struct {
+        name: []const u8,
+        active: bool,
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try serialize(bin, &out.writer, CrewMate{
+        .name = "Robin",
+        .active = true,
+    });
+
+    var reader: std.Io.Reader = .fixed(out.written());
+    var owned = try deserializeOwned(bin, CrewMate, std.testing.allocator, &reader);
+    defer owned.deinit();
+
+    try std.testing.expectEqualStrings("Robin", owned.value.name);
+    try std.testing.expect(owned.value.active);
 }
 
 test "generic binary entrypoint works" {
