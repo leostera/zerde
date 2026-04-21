@@ -211,6 +211,33 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.addImport("cbor_tests", cbor_tests_mod);
 
+    const bson_corpus_support_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bson_corpus_support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "corpus_support", .module = corpus_support_mod },
+            .{ .name = "zerde", .module = zerde_mod },
+        },
+    });
+    const bson_corpus_generated_mod = b.createModule(.{
+        .root_source_file = generateCorpusTests(b, "bson", ".bson", "bson_corpus_support"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bson_corpus_support", .module = bson_corpus_support_mod },
+        },
+    });
+    const bson_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bson_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bson_corpus_generated", .module = bson_corpus_generated_mod },
+        },
+    });
+    tests.root_module.addImport("bson_tests", bson_tests_mod);
+
     const run_tests = b.addRunArtifact(tests);
 
     const test_step = b.step("test", "Run zerde tests");

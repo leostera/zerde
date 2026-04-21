@@ -251,6 +251,7 @@ test "generic yaml entrypoint works" {
 
 test {
     _ = @import("bson.zig");
+    _ = @import("bson_tests");
     _ = @import("cbor_tests");
     _ = @import("meta.zig");
     _ = @import("typed.zig");
