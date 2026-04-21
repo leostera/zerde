@@ -1,8 +1,16 @@
 # zerde
 
-`zerde` is a serialization framework for Zig using comptime-specialization to
-emit optimal de/serialization code for any Zig datatype, with support for many
-common formats: JSON, BSON, CBOR, TOML, YAML, MessagePack, etc.
+`zerde` is a comptime-specialized serialization framework for Zig.
+
+Point it at a Zig type and a format, and it generates a typed serializer or
+deserializer for that exact combination.
+
+What you get:
+
+- one typed API across JSON, TOML, YAML, CBOR, BSON, MessagePack, and binary
+- fast read and write paths without a required runtime value tree
+- per-type and per-call customization for field renames and wire-shape policy
+- owned, arena-backed, and aliased slice parse entrypoints
 
 ```zig
 const std = @import("std");
@@ -39,7 +47,7 @@ pub fn main() !void {
 }
 ```
 
-## Current status
+## Formats
 
 | Format | Serialize | Reader deserialize | Slice deserialize | Aliased slice parse | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -51,7 +59,7 @@ pub fn main() !void {
 | CBOR | yes | yes | yes | yes | Definite-length writer; read accepts definite and indefinite arrays/maps |
 | YAML | yes | yes | yes | yes | Practical block-YAML subset with block mappings, block sequences, and flow scalar arrays |
 
-## Getting Started
+## Install
 
 Add `zerde` as a Zig dependency:
 
@@ -76,7 +84,9 @@ And from your Zig code:
 const zerde = @import("zerde");
 ```
 
-## Configuration
+Benchmark history and per-format runs live in [`bench/`](bench).
+
+## Customization
 
 `zerde` accepts configuration at two levels:
 
@@ -122,26 +132,3 @@ pub fn main() !void {
     }, .{});
 }
 ```
-
-## Ownership
-
-Use `parseSlice` or `deserialize` when you want `zerde` to allocate owned typed
-results.
-
-Use `parseSliceAliased` when the input buffer is stable and your type contains
-reference fields such as `[]const u8`; in that mode `zerde` may hand those
-fields back as slices into the original input.
-
-## Errors
-
-`zerde` can attach field-path and byte-location context to parse failures with
-`parseSliceWithDiagnostics` and `deserializeWithDiagnostics`.
-
-Use this when you need errors like `InvalidNumber at root.crew[0].bounty (offset
-19, line 1, column 20)` instead of a bare format error.
-
-`Diagnostic` records:
-
-- the structured field path
-- byte offset for all formats
-- line and column for text formats that can report them directly
