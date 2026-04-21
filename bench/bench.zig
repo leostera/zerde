@@ -5,6 +5,7 @@ const bin = @import("bin.zig");
 const bson = @import("bson.zig");
 const cbor = @import("cbor.zig");
 const json = @import("json.zig");
+const memory = @import("memory.zig");
 const msgpack = @import("msgpack.zig");
 const toml = @import("toml.zig");
 const wasm = @import("wasm.zig");
@@ -19,6 +20,10 @@ pub fn main(init: std.process.Init) !void {
     const mode = if (args.len >= 2) args[1] else "all";
     if (std.mem.eql(u8, mode, "json")) {
         try json.run(io, allocator);
+        return;
+    }
+    if (std.mem.eql(u8, mode, "memory")) {
+        try memory.run(io, allocator);
         return;
     }
     if (std.mem.eql(u8, mode, "bin")) {

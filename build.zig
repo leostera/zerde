@@ -490,6 +490,9 @@ pub fn build(b: *std.Build) void {
     const run_bench_json = b.addRunArtifact(bench_exe);
     run_bench_json.addArg("json");
 
+    const run_bench_memory = b.addRunArtifact(bench_exe);
+    run_bench_memory.addArg("memory");
+
     const run_bench_toml = b.addRunArtifact(bench_exe);
     run_bench_toml.addArg("toml");
 
@@ -519,6 +522,9 @@ pub fn build(b: *std.Build) void {
 
     const bench_json_step = b.step("bench-json", "Run JSON benchmark against std.json");
     bench_json_step.dependOn(&run_bench_json.step);
+
+    const bench_memory_step = b.step("bench-memory", "Run zerde allocation benchmark across formats");
+    bench_memory_step.dependOn(&run_bench_memory.step);
 
     const bench_toml_step = b.step("bench-toml", "Run TOML benchmark against zig-toml");
     bench_toml_step.dependOn(&run_bench_toml.step);

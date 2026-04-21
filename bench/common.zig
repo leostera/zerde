@@ -13,6 +13,7 @@ const zbench = @import("zbench");
 const zbor = @import("zbor");
 
 const Allocator = std.mem.Allocator;
+const Alignment = std.mem.Alignment;
 
 const Region = enum {
     us_east_1,
@@ -1251,6 +1252,305 @@ pub fn runZonBench(io: std.Io, allocator: Allocator) !void {
     }
 
     std.debug.print("\n", .{});
+}
+
+const MemoryStats = struct {
+    alloc_calls: usize = 0,
+    resize_calls: usize = 0,
+    remap_calls: usize = 0,
+    free_calls: usize = 0,
+    allocated_bytes: usize = 0,
+    freed_bytes: usize = 0,
+    live_bytes: usize = 0,
+    peak_live_bytes: usize = 0,
+};
+
+const MemoryScenarioResult = struct {
+    parse_bytes: usize,
+    write_bytes: usize,
+    parse: MemoryStats,
+    parse_aliased: ?MemoryStats,
+    write: MemoryStats,
+    roundtrip: MemoryStats,
+};
+
+const TrackingAllocator = struct {
+    child: Allocator,
+    stats: MemoryStats = .{},
+
+    fn init(child: Allocator) TrackingAllocator {
+        return .{ .child = child };
+    }
+
+    fn allocator(self: *TrackingAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const ptr = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
+        self.stats.alloc_calls += 1;
+        self.stats.allocated_bytes += len;
+        self.stats.live_bytes += len;
+        self.stats.peak_live_bytes = @max(self.stats.peak_live_bytes, self.stats.live_bytes);
+        return ptr;
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        if (!self.child.rawResize(memory, alignment, new_len, ret_addr)) return false;
+
+        self.stats.resize_calls += 1;
+        if (new_len > memory.len) {
+            const delta = new_len - memory.len;
+            self.stats.allocated_bytes += delta;
+            self.stats.live_bytes += delta;
+            self.stats.peak_live_bytes = @max(self.stats.peak_live_bytes, self.stats.live_bytes);
+        } else {
+            const delta = memory.len - new_len;
+            self.stats.freed_bytes += delta;
+            self.stats.live_bytes -|= delta;
+        }
+        return true;
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const ptr = self.child.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
+
+        self.stats.remap_calls += 1;
+        if (new_len > memory.len) {
+            const delta = new_len - memory.len;
+            self.stats.allocated_bytes += delta;
+            self.stats.live_bytes += delta;
+            self.stats.peak_live_bytes = @max(self.stats.peak_live_bytes, self.stats.live_bytes);
+        } else {
+            const delta = memory.len - new_len;
+            self.stats.freed_bytes += delta;
+            self.stats.live_bytes -|= delta;
+        }
+        return ptr;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.stats.free_calls += 1;
+        self.stats.freed_bytes += memory.len;
+        self.stats.live_bytes -|= memory.len;
+        self.child.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+pub fn runMemoryBench(io: std.Io, allocator: Allocator) !void {
+    @setEvalBranchQuota(50_000);
+    _ = io;
+    std.debug.print("zerde allocation benchmark\n", .{});
+    std.debug.print("scenarios: small, medium, large (~100 MiB)\n", .{});
+    std.debug.print("measures: owned parse, aliased parse when supported, write, roundtrip\n", .{});
+    std.debug.print("values: allocation calls, resize/remap calls, total allocated bytes, peak live bytes\n\n", .{});
+
+    try runPayloadMemoryBench("binary", zerde.bin, allocator);
+    try runPayloadMemoryBench("json", zerde.json, allocator);
+    try runPayloadMemoryBench("zon", zerde.zon, allocator);
+    try runPayloadMemoryBench("cbor", zerde.cbor, allocator);
+    try runBsonMemoryBench(allocator);
+    try runMsgpackMemoryBench(allocator);
+    try runTomlMemoryBench(allocator);
+    try runYamlMemoryBench(allocator);
+}
+
+fn runPayloadMemoryBench(comptime label: []const u8, comptime Format: type, allocator: Allocator) !void {
+    std.debug.print("{s}\n", .{label});
+    for (scenarios) |scenario| {
+        const value = try makePayload(allocator, scenario);
+        defer freePayload(allocator, value);
+        const result = try runTypedMemoryScenario(Format, Payload, Payload, value, .{}, .{});
+        printMemoryScenarioResult(scenario, result);
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runBsonMemoryBench(allocator: Allocator) !void {
+    std.debug.print("bson\n", .{});
+    for (scenarios) |scenario| {
+        const value = try makeBsonPayload(allocator, scenario);
+        defer freeBsonPayload(allocator, value);
+        const result = try runTypedMemoryScenario(zerde.bson, BsonPayload, BsonPayload, value, .{}, .{});
+        printMemoryScenarioResult(scenario, result);
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runMsgpackMemoryBench(allocator: Allocator) !void {
+    std.debug.print("msgpack\n", .{});
+    for (scenarios) |scenario| {
+        const value = try makeMsgpackPayload(allocator, scenario);
+        defer freeMsgpackPayload(allocator, value);
+        const result = try runTypedMemoryScenario(zerde.msgpack, MsgpackPayload, MsgpackPayload, value, .{}, .{});
+        printMemoryScenarioResult(scenario, result);
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runTomlMemoryBench(allocator: Allocator) !void {
+    std.debug.print("toml\n", .{});
+    inline for (scenarios) |scenario| {
+        const WriteType = TomlPayload(scenario.endpoint_count, scenario.metric_count, scenario.event_count);
+        const value = try makeTomlPayload(scenario.endpoint_count, scenario.metric_count, scenario.event_count, allocator);
+        defer freeTomlPayload(allocator, value);
+        const result = try runTypedMemoryScenario(zerde.toml, WriteType, TomlParsePayload, value.*, .{}, .{});
+        printMemoryScenarioResult(scenario, result);
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runYamlMemoryBench(allocator: Allocator) !void {
+    std.debug.print("yaml\n", .{});
+    for (scenarios) |scenario| {
+        const value = try makeYamlPayload(allocator, scenario);
+        defer freeYamlPayload(allocator, value);
+        const result = try runTypedMemoryScenario(zerde.yaml, YamlPayload, YamlPayload, value, .{
+            .omit_null_fields = true,
+        }, .{
+            .indent_width = 4,
+        });
+        printMemoryScenarioResult(scenario, result);
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runTypedMemoryScenario(
+    comptime Format: type,
+    comptime WriteType: type,
+    comptime ParseType: type,
+    value: WriteType,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !MemoryScenarioResult {
+    var input_out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer input_out.deinit();
+    try zerde.serializeWith(Format, &input_out.writer, value, serde_cfg, format_cfg);
+    const input = try std.heap.page_allocator.dupe(u8, input_out.written());
+    defer std.heap.page_allocator.free(input);
+
+    return .{
+        .parse_bytes = input.len,
+        .write_bytes = input.len,
+        .parse = try measureParseStats(Format, ParseType, input, serde_cfg, format_cfg),
+        .parse_aliased = try measureAliasedParseStats(Format, ParseType, input, serde_cfg, format_cfg),
+        .write = try measureWriteStats(Format, WriteType, value, serde_cfg, format_cfg),
+        .roundtrip = try measureRoundTripStats(Format, WriteType, ParseType, value, serde_cfg, format_cfg),
+    };
+}
+
+fn measureParseStats(
+    comptime Format: type,
+    comptime T: type,
+    input: []const u8,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !MemoryStats {
+    var tracker = TrackingAllocator.init(std.heap.page_allocator);
+    const allocator = tracker.allocator();
+    const parsed = try zerde.parseSliceWith(Format, T, allocator, input, serde_cfg, format_cfg);
+    zerde.free(allocator, parsed);
+    std.debug.assert(tracker.stats.live_bytes == 0);
+    return tracker.stats;
+}
+
+fn measureAliasedParseStats(
+    comptime Format: type,
+    comptime T: type,
+    input: []const u8,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !?MemoryStats {
+    if (!@hasDecl(Format, "parseSliceAliased")) return null;
+
+    var tracker = TrackingAllocator.init(std.heap.page_allocator);
+    const allocator = tracker.allocator();
+    const parsed = try zerde.parseSliceAliasedWith(Format, T, allocator, input, serde_cfg, format_cfg);
+    zerde.free(allocator, parsed);
+    std.debug.assert(tracker.stats.live_bytes == 0);
+    return tracker.stats;
+}
+
+fn measureWriteStats(
+    comptime Format: type,
+    comptime T: type,
+    value: T,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !MemoryStats {
+    var tracker = TrackingAllocator.init(std.heap.page_allocator);
+    const allocator = tracker.allocator();
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    try zerde.serializeWith(Format, &out.writer, value, serde_cfg, format_cfg);
+    out.deinit();
+    std.debug.assert(tracker.stats.live_bytes == 0);
+    return tracker.stats;
+}
+
+fn measureRoundTripStats(
+    comptime Format: type,
+    comptime WriteType: type,
+    comptime ParseType: type,
+    value: WriteType,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !MemoryStats {
+    var tracker = TrackingAllocator.init(std.heap.page_allocator);
+    const allocator = tracker.allocator();
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    try zerde.serializeWith(Format, &out.writer, value, serde_cfg, format_cfg);
+    const parsed = try zerde.parseSliceWith(Format, ParseType, allocator, out.written(), serde_cfg, format_cfg);
+    zerde.free(allocator, parsed);
+    out.deinit();
+    std.debug.assert(tracker.stats.live_bytes == 0);
+    return tracker.stats;
+}
+
+fn printMemoryScenarioResult(scenario: Scenario, result: MemoryScenarioResult) void {
+    std.debug.print("  {s}\n", .{scenario.name});
+    std.debug.print("    parse bytes: {d} ({d:.2} MiB)\n", .{
+        result.parse_bytes,
+        bytesToMiB(result.parse_bytes),
+    });
+    std.debug.print("    write bytes: {d} ({d:.2} MiB)\n", .{
+        result.write_bytes,
+        bytesToMiB(result.write_bytes),
+    });
+    printMemoryStats("parse", result.parse);
+    if (result.parse_aliased) |stats| {
+        printMemoryStats("parse aliased", stats);
+    } else {
+        std.debug.print("    parse aliased: n/a\n", .{});
+    }
+    printMemoryStats("write", result.write);
+    printMemoryStats("roundtrip", result.roundtrip);
+}
+
+fn printMemoryStats(label: []const u8, stats: MemoryStats) void {
+    std.debug.print(
+        "    {s}: allocs {d}, resizes {d}, remaps {d}, frees {d}, allocated {d} B, peak {d} B\n",
+        .{
+            label,
+            stats.alloc_calls,
+            stats.resize_calls,
+            stats.remap_calls,
+            stats.free_calls,
+            stats.allocated_bytes,
+            stats.peak_live_bytes,
+        },
+    );
 }
 
 const ZonBenchCase = struct {
