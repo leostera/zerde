@@ -47,7 +47,7 @@ pub fn main() !void {
 | BSON | yes | yes | yes | yes | Typed BSON path |
 | MessagePack | yes | yes | yes | yes | Typed MessagePack path |
 | JSON | yes | yes | yes | yes | Fully typed fast path, benchmarked against `std.json` |
-| TOML | yes | yes | yes | no | Practical TOML subset centered on scalars, arrays, tables, and arrays-of-tables |
+| TOML | yes | yes | yes | yes | Practical TOML subset centered on scalars, arrays, tables, and arrays-of-tables |
 | CBOR | yes | yes | yes | yes | Definite-length writer; read accepts definite and indefinite arrays/maps |
 | YAML | yes | yes | yes | yes | Practical block-YAML subset with block mappings, block sequences, and flow scalar arrays |
 
@@ -122,6 +122,15 @@ pub fn main() !void {
     }, .{});
 }
 ```
+
+## Ownership
+
+Use `parseSlice` or `deserialize` when you want `zerde` to allocate owned typed
+results.
+
+Use `parseSliceAliased` when the input buffer is stable and your type contains
+reference fields such as `[]const u8`; in that mode `zerde` may hand those
+fields back as slices into the original input.
 
 ## Errors
 

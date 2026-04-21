@@ -77,7 +77,7 @@ const ArrayNode = struct {
 };
 
 const Entry = struct {
-    key: []const u8,
+    key: StringToken,
     value: Node,
 };
 
@@ -93,17 +93,15 @@ const Table = struct {
 
     fn findEntry(self: *Table, key: []const u8) ?*Entry {
         for (self.entries.items) |*entry| {
-            if (std.mem.eql(u8, entry.key, key)) return entry;
+            if (std.mem.eql(u8, entry.key.bytes, key)) return entry;
         }
         return null;
     }
 
-    fn addEntry(self: *Table, allocator: Allocator, key: []const u8, value: Node) !*Entry {
-        if (self.findEntry(key) != null) return error.DuplicateField;
-        const owned_key = try allocator.dupe(u8, key);
-        errdefer allocator.free(owned_key);
+    fn addEntry(self: *Table, allocator: Allocator, key: StringToken, value: Node) !*Entry {
+        if (self.findEntry(key.bytes) != null) return error.DuplicateField;
         try self.entries.append(allocator, .{
-            .key = owned_key,
+            .key = key,
             .value = value,
         });
         return &self.entries.items[self.entries.items.len - 1];
@@ -111,7 +109,7 @@ const Table = struct {
 
     fn deinit(self: *Table, allocator: Allocator) void {
         for (self.entries.items) |entry| {
-            allocator.free(entry.key);
+            entry.key.deinit(allocator);
             entry.value.deinit(allocator);
         }
         self.entries.deinit(allocator);
@@ -132,11 +130,11 @@ const Frame = union(enum) {
 
 pub fn readerDeserializer(allocator: Allocator, reader: *std.Io.Reader, comptime cfg: anytype) !TomlDeserializer(@TypeOf(cfg)) {
     const input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
-    return TomlDeserializer(@TypeOf(cfg)).init(allocator, input, true, cfg);
+    return TomlDeserializer(@TypeOf(cfg)).init(allocator, input, true, false, cfg);
 }
 
 pub fn sliceDeserializer(allocator: Allocator, input: []const u8, comptime cfg: anytype) !TomlDeserializer(@TypeOf(cfg)) {
-    return TomlDeserializer(@TypeOf(cfg)).init(allocator, input, false, cfg);
+    return TomlDeserializer(@TypeOf(cfg)).init(allocator, input, false, false, cfg);
 }
 
 pub fn deserialize(comptime T: type, allocator: Allocator, reader: *std.Io.Reader) ParseError!T {
@@ -175,11 +173,30 @@ pub fn parseSliceWith(
     return value;
 }
 
+pub fn parseSliceAliased(comptime T: type, allocator: Allocator, input: []const u8) ParseError!T {
+    return parseSliceAliasedWith(T, allocator, input, .{}, .{});
+}
+
+pub fn parseSliceAliasedWith(
+    comptime T: type,
+    allocator: Allocator,
+    input: []const u8,
+    comptime serde_cfg: anytype,
+    comptime read_cfg: anytype,
+) ParseError!T {
+    var deserializer = try TomlDeserializer(@TypeOf(read_cfg)).init(allocator, input, false, true, read_cfg);
+    defer deserializer.deinit(allocator);
+    const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
+    try deserializer.finish();
+    return value;
+}
+
 pub fn TomlDeserializer(comptime Config: type) type {
     return struct {
         input: []const u8,
         cfg: Config,
         owns_input: bool,
+        can_borrow_strings: bool,
         root: Node,
         current: ?*const Node = null,
         stack: [128]Frame = undefined,
@@ -187,13 +204,14 @@ pub fn TomlDeserializer(comptime Config: type) type {
 
         const Self = @This();
 
-        fn init(allocator: Allocator, input: []const u8, owns_input: bool, cfg: Config) !Self {
+        fn init(allocator: Allocator, input: []const u8, owns_input: bool, can_borrow_strings: bool, cfg: Config) !Self {
             var parser = Parser{ .input = input };
             const root_table = try parser.parseDocument(allocator);
             return .{
                 .input = input,
                 .cfg = cfg,
                 .owns_input = owns_input,
+                .can_borrow_strings = can_borrow_strings,
                 .root = .{ .table = root_table },
             };
         }
@@ -205,6 +223,10 @@ pub fn TomlDeserializer(comptime Config: type) type {
 
         pub fn finish(self: *Self) !void {
             _ = self.cfg;
+        }
+
+        pub fn borrowStrings(self: *Self) bool {
+            return self.can_borrow_strings;
         }
 
         pub fn peekKind(self: *Self) !ValueKind {
@@ -314,7 +336,7 @@ pub fn TomlDeserializer(comptime Config: type) type {
             frame.index += 1;
             self.current = &entry.value;
             return .{
-                .bytes = entry.key,
+                .bytes = entry.key.bytes,
                 .allocated = false,
             };
         }
@@ -593,7 +615,8 @@ const Parser = struct {
 
         const start = self.index;
         var builder: std.ArrayList(u8) = .empty;
-        errdefer builder.deinit(allocator);
+        var builder_owned_here = true;
+        errdefer if (builder_owned_here) builder.deinit(allocator);
 
         while (true) {
             const c = self.consume() orelse return error.UnexpectedEndOfInput;
@@ -615,6 +638,7 @@ const Parser = struct {
                 '\\' => {
                     try builder.appendSlice(allocator, self.input[start .. self.index - 1]);
                     try self.appendEscape(allocator, &builder);
+                    builder_owned_here = false;
                     return self.finishEscapedString(allocator, builder);
                 },
                 0...31 => return error.InvalidStringCharacter,
@@ -788,11 +812,11 @@ fn effectiveMaxInputBytes(comptime cfg: anytype) usize {
     return 16 * 1024 * 1024;
 }
 
-fn resolveExplicitTablePath(allocator: Allocator, root: *Table, path: []const StringToken) !*Table {
+fn resolveExplicitTablePath(allocator: Allocator, root: *Table, path: []StringToken) !*Table {
     if (path.len == 0) return error.InvalidTomlState;
 
     var table = root;
-    for (path, 0..) |segment, index| {
+    for (path, 0..) |*segment, index| {
         const is_last = index + 1 == path.len;
         if (table.findEntry(segment.bytes)) |entry| {
             switch (entry.value) {
@@ -812,7 +836,7 @@ fn resolveExplicitTablePath(allocator: Allocator, root: *Table, path: []const St
         } else {
             const child = try Table.create(allocator);
             child.declared = is_last;
-            _ = try table.addEntry(allocator, segment.bytes, .{ .table = child });
+            _ = try table.addEntry(allocator, takeToken(segment), .{ .table = child });
             table = child;
         }
     }
@@ -820,16 +844,16 @@ fn resolveExplicitTablePath(allocator: Allocator, root: *Table, path: []const St
     return table;
 }
 
-fn appendArrayTablePath(allocator: Allocator, root: *Table, path: []const StringToken) !*Table {
+fn appendArrayTablePath(allocator: Allocator, root: *Table, path: []StringToken) !*Table {
     if (path.len == 0) return error.InvalidTomlState;
 
     var table = root;
-    for (path[0 .. path.len - 1]) |segment| {
-        table = try resolveDescendantTable(allocator, table, segment.bytes);
+    for (path[0 .. path.len - 1]) |*segment| {
+        table = try resolveDescendantTableFromToken(allocator, table, segment);
     }
 
-    const leaf = path[path.len - 1].bytes;
-    if (table.findEntry(leaf)) |entry| {
+    const leaf = &path[path.len - 1];
+    if (table.findEntry(leaf.bytes)) |entry| {
         switch (entry.value) {
             .array => |array| {
                 _ = try array.lastTable();
@@ -848,23 +872,23 @@ fn appendArrayTablePath(allocator: Allocator, root: *Table, path: []const String
     errdefer child.deinit(allocator);
     child.declared = true;
     try array.append(allocator, .{ .table = child });
-    _ = try table.addEntry(allocator, leaf, .{ .array = array });
+    _ = try table.addEntry(allocator, takeToken(leaf), .{ .array = array });
     return child;
 }
 
-fn insertValuePath(allocator: Allocator, current_table: *Table, path: []const StringToken, value: Node) !void {
+fn insertValuePath(allocator: Allocator, current_table: *Table, path: []StringToken, value: Node) !void {
     if (path.len == 0) return error.InvalidTomlState;
 
     var table = current_table;
-    for (path[0 .. path.len - 1]) |segment| {
-        table = try resolveDescendantTable(allocator, table, segment.bytes);
+    for (path[0 .. path.len - 1]) |*segment| {
+        table = try resolveDescendantTableFromToken(allocator, table, segment);
     }
 
-    _ = try table.addEntry(allocator, path[path.len - 1].bytes, value);
+    _ = try table.addEntry(allocator, takeToken(&path[path.len - 1]), value);
 }
 
-fn resolveDescendantTable(allocator: Allocator, table: *Table, key: []const u8) !*Table {
-    if (table.findEntry(key)) |entry| {
+fn resolveDescendantTableFromToken(allocator: Allocator, table: *Table, key: *StringToken) !*Table {
+    if (table.findEntry(key.bytes)) |entry| {
         return switch (entry.value) {
             .table => |child| child,
             .array => |array| try array.lastTable(),
@@ -873,8 +897,17 @@ fn resolveDescendantTable(allocator: Allocator, table: *Table, key: []const u8) 
     }
 
     const child = try Table.create(allocator);
-    _ = try table.addEntry(allocator, key, .{ .table = child });
+    _ = try table.addEntry(allocator, takeToken(key), .{ .table = child });
     return child;
+}
+
+fn takeToken(token: *StringToken) StringToken {
+    const moved = token.*;
+    token.* = .{
+        .bytes = &.{},
+        .allocated = false,
+    };
+    return moved;
 }
 
 test "typed deserialize nested struct from toml" {
@@ -998,6 +1031,61 @@ test "typed deserialize detects duplicate and unknown toml fields" {
             .deny_unknown_fields = true,
         }, .{}),
     );
+}
+
+test "parseSliceAliased reuses toml string bytes from input" {
+    const Example = struct {
+        serviceName: []const u8,
+        nickname: []const u8,
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    const input =
+        \\service_name = "Franky"
+        \\nickname = "Cutty Flam"
+        \\
+    ;
+
+    const decoded = try parseSliceAliased(Example, std.testing.allocator, input);
+    try std.testing.expectEqualStrings("Franky", decoded.serviceName);
+    try std.testing.expectEqualStrings("Cutty Flam", decoded.nickname);
+
+    const begin = @intFromPtr(input.ptr);
+    const end = begin + input.len;
+    const service_ptr = @intFromPtr(decoded.serviceName.ptr);
+    const nickname_ptr = @intFromPtr(decoded.nickname.ptr);
+    try std.testing.expect(service_ptr >= begin and service_ptr < end);
+    try std.testing.expect(nickname_ptr >= begin and nickname_ptr < end);
+}
+
+test "parseSlice keeps toml strings owned at the typed edge" {
+    const Example = struct {
+        serviceName: []const u8,
+
+        pub const serde = .{
+            .rename_all = .snake_case,
+        };
+    };
+
+    const input =
+        \\service_name = "Franky"
+        \\
+    ;
+
+    const decoded = try parseSliceWith(Example, std.testing.allocator, input, .{
+        .rename_all = .snake_case,
+    }, .{});
+    defer typed.free(std.testing.allocator, decoded);
+
+    try std.testing.expectEqualStrings("Franky", decoded.serviceName);
+
+    const begin = @intFromPtr(input.ptr);
+    const end = begin + input.len;
+    const service_ptr = @intFromPtr(decoded.serviceName.ptr);
+    try std.testing.expect(service_ptr < begin or service_ptr >= end);
 }
 
 test "toml reader entrypoint works" {

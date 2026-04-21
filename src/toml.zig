@@ -18,6 +18,8 @@ pub const deserialize = read_impl.deserialize;
 pub const deserializeWith = read_impl.deserializeWith;
 pub const parseSlice = read_impl.parseSlice;
 pub const parseSliceWith = read_impl.parseSliceWith;
+pub const parseSliceAliased = read_impl.parseSliceAliased;
+pub const parseSliceAliasedWith = read_impl.parseSliceAliasedWith;
 
 /// Streaming TOML writer used by the typed layer.
 pub fn serializer(writer: *std.Io.Writer, comptime cfg: anytype) TomlSerializer(@TypeOf(cfg)) {
