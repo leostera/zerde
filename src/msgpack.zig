@@ -364,6 +364,15 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             });
         }
 
+        pub fn beginArrayLen(self: *Self) !?usize {
+            const len = try self.readContainerLen(.array);
+            try self.push(.{
+                .kind = .array,
+                .remaining = len,
+            });
+            return len;
+        }
+
         pub fn nextArrayItem(self: *Self) !bool {
             const frame = self.current();
             if (frame.kind != .array) return error.InvalidMsgpackState;

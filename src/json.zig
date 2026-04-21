@@ -280,6 +280,11 @@ pub fn JsonDeserializer(comptime Config: type) type {
             try self.push(.{ .kind = .array, .first = true });
         }
 
+        pub fn beginArrayLen(self: *Self) !?usize {
+            try self.beginArray();
+            return null;
+        }
+
         pub fn nextArrayItem(self: *Self) !bool {
             const frame = self.current();
             if (frame.kind != .array) return error.InvalidJsonState;

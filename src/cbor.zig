@@ -277,6 +277,18 @@ pub fn CborDeserializer(comptime Config: type) type {
             });
         }
 
+        pub fn beginArrayLen(self: *Self) !?usize {
+            const header = try self.readResolvedHeader();
+            if (header.major != 4) return error.UnexpectedType;
+            const len = if (header.indefinite) null else std.math.cast(usize, header.value) orelse return error.LengthMismatch;
+            try self.push(.{
+                .kind = .array,
+                .indefinite = header.indefinite,
+                .remaining = len orelse 0,
+            });
+            return len;
+        }
+
         pub fn nextArrayItem(self: *Self) !bool {
             const frame = self.current();
             if (frame.kind != .array) return error.InvalidCborState;

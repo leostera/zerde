@@ -282,6 +282,21 @@ pub fn YamlDeserializer(comptime Config: type) type {
             });
         }
 
+        pub fn beginArrayLen(self: *Self) !?usize {
+            const array = switch (self.currentNode().*) {
+                .array => |value| value,
+                else => return error.UnexpectedType,
+            };
+
+            try self.push(.{
+                .array = .{
+                    .array = array,
+                    .index = 0,
+                },
+            });
+            return array.items.items.len;
+        }
+
         pub fn nextArrayItem(self: *Self) !bool {
             const frame = switch (self.currentFrame().*) {
                 .array => |*array_frame| array_frame,

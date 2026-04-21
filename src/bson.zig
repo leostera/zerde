@@ -388,6 +388,11 @@ pub fn BsonDeserializer(comptime Config: type) type {
             });
         }
 
+        pub fn beginArrayLen(self: *Self) !?usize {
+            try self.beginArray();
+            return null;
+        }
+
         pub fn nextArrayItem(self: *Self) !bool {
             const frame = self.current();
             if (frame.kind != .array) return error.InvalidBsonState;

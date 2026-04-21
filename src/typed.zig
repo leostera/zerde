@@ -285,10 +285,22 @@ fn deserializeArray(
         return result;
     }
 
-    try deserializer.beginArray();
+    const known_len = try beginArrayWithKnownLen(deserializer);
+    if (known_len) |len| {
+        if (len != info.len) return error.LengthMismatch;
+    }
     var result: T = undefined;
-    var index: usize = 0;
 
+    if (known_len) |_| {
+        inline for (0..info.len) |index| {
+            if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
+            result[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+        }
+        if (try deserializer.nextArrayItem()) return error.LengthMismatch;
+        return result;
+    }
+
+    var index: usize = 0;
     while (try deserializer.nextArrayItem()) {
         if (index >= info.len) return error.LengthMismatch;
         result[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
@@ -319,7 +331,26 @@ fn deserializePointer(
                 return allocator.dupe(info.child, token.bytes);
             }
 
-            try deserializer.beginArray();
+            const known_len = try beginArrayWithKnownLen(deserializer);
+            if (known_len) |len| {
+                const items = try allocator.alloc(info.child, len);
+                errdefer allocator.free(items);
+
+                var initialized: usize = 0;
+                errdefer {
+                    for (items[0..initialized]) |item| freeTyped(info.child, allocator, item);
+                }
+
+                for (0..len) |index| {
+                    if (!try deserializer.nextArrayItem()) return error.LengthMismatch;
+                    items[index] = try deserializeValue(info.child, allocator, deserializer, cfg);
+                    initialized = index + 1;
+                }
+
+                if (try deserializer.nextArrayItem()) return error.LengthMismatch;
+                return items;
+            }
+
             var items: std.ArrayList(info.child) = .empty;
             errdefer {
                 for (items.items) |item| freeTyped(info.child, allocator, item);
@@ -341,6 +372,16 @@ fn deserializePointer(
         },
         else => return error.UnsupportedType,
     }
+}
+
+fn beginArrayWithKnownLen(deserializer: anytype) anyerror!?usize {
+    const DeserializerType = @TypeOf(deserializer.*);
+    if (@hasDecl(DeserializerType, "beginArrayLen")) {
+        return try deserializer.beginArrayLen();
+    }
+
+    try deserializer.beginArray();
+    return null;
 }
 
 fn readByteToken(allocator: Allocator, deserializer: anytype) anyerror!StringToken {

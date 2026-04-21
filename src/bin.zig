@@ -259,6 +259,14 @@ pub fn BinDeserializer(comptime Config: type) type {
             self.array_stack_len += 1;
         }
 
+        pub fn beginArrayLen(self: *Self) !?usize {
+            const len = try self.readVarUInt();
+            if (self.array_stack_len == self.array_stack.len) return error.BinaryNestingTooDeep;
+            self.array_stack[self.array_stack_len] = .{ .remaining = len };
+            self.array_stack_len += 1;
+            return len;
+        }
+
         pub fn nextArrayItem(self: *Self) !bool {
             const frame = self.currentArray();
             if (frame.remaining == 0) {
