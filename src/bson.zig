@@ -33,8 +33,8 @@ const ElementSlot = union(enum) {
 
 const Frame = struct {
     kind: ContainerKind,
-    slot: ElementSlot,
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
+    start: usize,
+    is_root: bool,
 };
 
 const ReaderFrame = struct {
@@ -73,6 +73,7 @@ pub fn BsonSerializer(comptime Config: type) type {
         writer: *std.Io.Writer,
         cfg: Config,
         pending_slot: ?ElementSlot = null,
+        buffer: std.ArrayListUnmanaged(u8) = .empty,
         stack: [128]Frame = undefined,
         stack_len: usize = 0,
 
@@ -88,10 +89,7 @@ pub fn BsonSerializer(comptime Config: type) type {
 
         pub fn deinit(self: *Self) void {
             _ = self.cfg;
-            while (self.stack_len > 0) {
-                var frame = self.pop();
-                frame.bytes.deinit(allocator);
-            }
+            self.buffer.deinit(allocator);
         }
 
         pub fn emitNull(self: *Self) !void {
@@ -121,21 +119,17 @@ pub fn BsonSerializer(comptime Config: type) type {
         pub fn emitString(self: *Self, value: []const u8) !void {
             if (self.stack_len == 0) return error.BsonRootMustBeDocument;
             const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
-            var frame = self.current();
-            try frame.bytes.append(allocator, @intFromEnum(BsonType.string));
-            try appendSlotName(&frame.bytes, slot);
-            try appendBsonString(&frame.bytes, value);
+            try appendElementHeader(&self.buffer, .string, slot);
+            try appendBsonString(&self.buffer, value);
         }
 
         pub fn emitBytes(self: *Self, value: []const u8) !void {
             if (self.stack_len == 0) return error.BsonRootMustBeDocument;
             const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
-            var frame = self.current();
-            try frame.bytes.append(allocator, @intFromEnum(BsonType.binary));
-            try appendSlotName(&frame.bytes, slot);
-            try appendInt32Payload(&frame.bytes, value.len);
-            try frame.bytes.append(allocator, 0x00);
-            try frame.bytes.appendSlice(allocator, value);
+            try appendElementHeader(&self.buffer, .binary, slot);
+            try appendInt32Payload(&self.buffer, value.len);
+            try self.buffer.append(allocator, 0x00);
+            try self.buffer.appendSlice(allocator, value);
         }
 
         pub fn emitEnum(self: *Self, comptime _: type, value: anytype) !void {
@@ -144,13 +138,20 @@ pub fn BsonSerializer(comptime Config: type) type {
 
         pub fn beginStruct(self: *Self, comptime T: type) !void {
             _ = T;
-            const slot: ElementSlot = if (self.stack_len == 0)
-                .root
-            else
-                self.takePendingSlot() orelse return error.InvalidBsonState;
+            const start = if (self.stack_len == 0) blk: {
+                try self.buffer.appendNTimes(allocator, 0x00, 4);
+                break :blk @as(usize, 0);
+            } else blk: {
+                const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
+                try appendElementHeader(&self.buffer, .document, slot);
+                const child_start = self.buffer.items.len;
+                try self.buffer.appendNTimes(allocator, 0x00, 4);
+                break :blk child_start;
+            };
             try self.push(.{
                 .kind = .object,
-                .slot = slot,
+                .start = start,
+                .is_root = self.stack_len == 0,
             });
         }
 
@@ -184,7 +185,7 @@ pub fn BsonSerializer(comptime Config: type) type {
             _ = T;
             const frame = self.pop();
             if (frame.kind != .object) return error.InvalidBsonState;
-            try self.finishFrame(frame, .document);
+            try self.finishFrame(frame);
         }
 
         pub fn beginArray(self: *Self, comptime Child: type, len: usize) !void {
@@ -192,9 +193,13 @@ pub fn BsonSerializer(comptime Config: type) type {
             _ = len;
             if (self.stack_len == 0) return error.BsonRootMustBeDocument;
             const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
+            try appendElementHeader(&self.buffer, .array, slot);
+            const start = self.buffer.items.len;
+            try self.buffer.appendNTimes(allocator, 0x00, 4);
             try self.push(.{
                 .kind = .array,
-                .slot = slot,
+                .start = start,
+                .is_root = false,
             });
         }
 
@@ -215,30 +220,22 @@ pub fn BsonSerializer(comptime Config: type) type {
             _ = len;
             const frame = self.pop();
             if (frame.kind != .array) return error.InvalidBsonState;
-            try self.finishFrame(frame, .array);
+            try self.finishFrame(frame);
         }
 
         fn appendScalar(self: *Self, tag: BsonType, payload: []const u8) !void {
             if (self.stack_len == 0) return error.BsonRootMustBeDocument;
             const slot = self.takePendingSlot() orelse return error.InvalidBsonState;
-            try appendElement(self.current(), tag, slot, payload);
+            try appendElementToBuffer(&self.buffer, tag, slot, payload);
         }
 
-        fn finishFrame(self: *Self, frame: Frame, tag: BsonType) !void {
-            var mutable_frame = frame;
-            defer mutable_frame.bytes.deinit(allocator);
+        fn finishFrame(self: *Self, frame: Frame) !void {
+            try self.buffer.append(allocator, 0x00);
+            writeInt32Prefix(self.buffer.items[frame.start .. frame.start + 4], self.buffer.items.len - frame.start);
 
-            try mutable_frame.bytes.append(allocator, 0x00);
-            writeInt32Prefix(mutable_frame.bytes.items[0..4], mutable_frame.bytes.items.len);
-
-            switch (mutable_frame.slot) {
-                .root => {
-                    try self.writer.writeAll(mutable_frame.bytes.items);
-                },
-                else => {
-                    if (self.stack_len == 0) return error.InvalidBsonState;
-                    try appendElement(self.current(), tag, mutable_frame.slot, mutable_frame.bytes.items);
-                },
+            if (frame.is_root) {
+                try self.writer.writeAll(self.buffer.items);
+                self.buffer.clearRetainingCapacity();
             }
         }
 
@@ -250,9 +247,7 @@ pub fn BsonSerializer(comptime Config: type) type {
 
         fn push(self: *Self, frame: Frame) !void {
             if (self.stack_len == self.stack.len) return error.BsonNestingTooDeep;
-            var owned = frame;
-            try owned.bytes.appendNTimes(allocator, 0x00, 4);
-            self.stack[self.stack_len] = owned;
+            self.stack[self.stack_len] = frame;
             self.stack_len += 1;
         }
 
@@ -645,10 +640,14 @@ pub fn parseSliceAliasedWith(
     return value;
 }
 
-fn appendElement(frame: *Frame, tag: BsonType, slot: ElementSlot, payload: []const u8) !void {
-    try frame.bytes.append(BsonSerializer(WriteConfig).allocator, @intFromEnum(tag));
-    try appendSlotName(&frame.bytes, slot);
-    try frame.bytes.appendSlice(BsonSerializer(WriteConfig).allocator, payload);
+fn appendElementToBuffer(buffer: *std.ArrayListUnmanaged(u8), tag: BsonType, slot: ElementSlot, payload: []const u8) !void {
+    try appendElementHeader(buffer, tag, slot);
+    try buffer.appendSlice(BsonSerializer(WriteConfig).allocator, payload);
+}
+
+fn appendElementHeader(buffer: *std.ArrayListUnmanaged(u8), tag: BsonType, slot: ElementSlot) !void {
+    try buffer.append(BsonSerializer(WriteConfig).allocator, @intFromEnum(tag));
+    try appendSlotName(buffer, slot);
 }
 
 fn appendSlotName(buffer: *std.ArrayListUnmanaged(u8), slot: ElementSlot) !void {
