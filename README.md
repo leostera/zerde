@@ -23,7 +23,10 @@ The core idea is the same one that makes Serde useful:
 
 In practice that means you can use the same public API with different formats:
 
+- `zerde.serialize(zerde.bin, writer, value)`
+- `zerde.serialize(zerde.bson, writer, value)`
 - `zerde.serialize(zerde.json, writer, value)`
+- `zerde.serialize(zerde.msgpack, writer, value)`
 - `zerde.serialize(zerde.toml, writer, value)`
 - `zerde.serialize(zerde.cbor, writer, value)`
 - `zerde.serialize(zerde.yaml, writer, value)`
@@ -35,6 +38,9 @@ The hot paths do not go through a runtime `Value` tree. For supported formats, `
 
 | Format | Serialize | Reader deserialize | Slice deserialize | Aliased slice parse | Notes |
 | --- | --- | --- | --- | --- | --- |
+| Binary | yes | yes | yes | yes | Schema-driven compact binary format, benchmarked against `bufzilla` |
+| BSON | yes | yes | yes | yes | Typed BSON path, benchmarked against `zig-bson` |
+| MessagePack | yes | yes | yes | yes | Typed MessagePack path, benchmarked against `msgpack.zig` |
 | JSON | yes | yes | yes | yes | Fully typed fast path, benchmarked against `std.json` |
 | TOML | yes | yes | yes | no | Practical TOML subset centered on scalars, arrays, tables, and arrays-of-tables |
 | CBOR | yes | yes | yes | yes | Definite-length writer; read accepts definite and indefinite arrays/maps |
@@ -42,6 +48,9 @@ The hot paths do not go through a runtime `Value` tree. For supported formats, `
 
 Format-specific notes:
 
+- Binary is compact and schema-driven rather than self-describing, so both sides need the same `T`.
+- BSON writes typed BSON documents and arrays directly without an intermediate runtime tree.
+- MessagePack currently uses compact numeric enum tags.
 - JSON is the most complete text backend today, including `parseSliceAliased`.
 - TOML read and write are both typed, but the supported surface is intentionally smaller than the full TOML spec.
 - CBOR accepts both text strings and byte strings for `[]const u8` and `[N]u8`.
@@ -115,8 +124,8 @@ pub fn main() !void {
 Owned parse path:
 
 ```zig
-const decoded = try zerde.parseSlice(zerde.json, User, allocator, input);
-defer zerde.free(allocator, decoded);
+var owned = try zerde.parseSliceOwned(zerde.json, User, allocator, input);
+defer owned.deinit();
 ```
 
 Aliased parse path:
@@ -126,6 +135,13 @@ var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 defer arena.deinit();
 
 const decoded = try zerde.parseSliceAliased(zerde.json, User, arena.allocator(), input);
+```
+
+Manual ownership path:
+
+```zig
+const decoded = try zerde.parseSlice(zerde.json, User, allocator, input);
+defer zerde.free(allocator, decoded);
 ```
 
 `parseSliceAliased` may return string fields that point directly into `input` when the JSON string is unescaped. Use it when:
@@ -160,8 +176,8 @@ The TOML backend uses two struct passes so simple key/value pairs are emitted be
 Owned TOML parse path:
 
 ```zig
-const decoded = try zerde.parseSlice(zerde.toml, Config, allocator, input);
-defer zerde.free(allocator, decoded);
+var owned = try zerde.parseSliceOwned(zerde.toml, Config, allocator, input);
+defer owned.deinit();
 ```
 
 ## CBOR Usage
@@ -186,11 +202,63 @@ try zerde.serializeWith(zerde.cbor, &out.writer, Event{
     .rename_all = .snake_case,
 }, .{});
 
-const decoded = try zerde.parseSlice(zerde.cbor, Event, allocator, out.written());
-defer zerde.free(allocator, decoded);
+var owned = try zerde.parseSliceOwned(zerde.cbor, Event, allocator, out.written());
+defer owned.deinit();
 ```
 
 The CBOR backend writes structs as maps and arrays with their exact lengths. String fields are emitted as CBOR text strings; on read, `[]const u8` and `[N]u8` accept either CBOR text or byte strings.
+
+## Binary Usage
+
+```zig
+const LogEntry = struct {
+    captain: []const u8,
+    crew_size: u16,
+    active: bool,
+};
+
+var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+defer out.deinit();
+
+try zerde.serialize(zerde.bin, &out.writer, LogEntry{
+    .captain = "Luffy",
+    .crew_size = 10,
+    .active = true,
+});
+
+var owned = try zerde.parseSliceOwned(zerde.bin, LogEntry, allocator, out.written());
+defer owned.deinit();
+```
+
+The binary backend is compact and schema-driven. It does not carry field names on the wire, so both ends must agree on `T`.
+
+## BSON Usage
+
+```zig
+const Report = struct {
+    island_name: []const u8,
+    alerts: []const []const u8,
+};
+
+try zerde.serialize(zerde.bson, writer, Report{
+    .island_name = "Egghead",
+    .alerts = &.{ "buster-call-risk", "marine-fleet-nearby" },
+});
+```
+
+## MessagePack Usage
+
+```zig
+const Chest = struct {
+    owner: []const u8,
+    berries: u64,
+};
+
+try zerde.serialize(zerde.msgpack, writer, Chest{
+    .owner = "Nami",
+    .berries = 9000000,
+});
+```
 
 ## YAML Usage
 
@@ -214,16 +282,19 @@ The YAML backend writes a practical block-style subset and can parse that same s
 
 ## Corpus Tests
 
-Corpus-driven roundtrip tests now cover JSON, TOML, YAML, and CBOR under [`tests/corpus`](tests/corpus).
+Corpus-driven roundtrip tests now cover binary, BSON, CBOR, JSON, MessagePack, TOML, and YAML under [`tests/corpus`](tests/corpus).
 `build.zig` scans each format directory, generates one test per fixture, parses each file into a typed value, serializes it back out, and requires an exact byte-for-byte match.
 
-Each corpus is feature-first: files like `null.json`, `empty.toml`, `object_nested.yaml`, and `object_single.cbor` exercise the wire format directly, and the support module maps each fixture to the smallest matching Zig type.
+Each corpus is feature-first: files like `null.json`, `empty.toml`, `object_nested.yaml`, `object_single.cbor`, `object_nested.bson`, `enum_field.msgpack`, and `object_single.bin` exercise the wire format directly, and the support module maps each fixture to the smallest matching Zig type.
 That exact match requirement is intentional: fixture files should already be in `zerde`'s canonical output form for the chosen serde and format config.
 When a roundtrip differs, the support code prints the first mismatching byte and a small context window before failing the test.
 
 ## Benchmarks
 
 Benchmark workflow and commands live in [bench/README.md](bench/README.md).
+Binary benchmark history lives in [bench/BIN.md](bench/BIN.md).
+BSON benchmark history lives in [bench/BSON.md](bench/BSON.md).
+MessagePack benchmark history lives in [bench/MSGPACK.md](bench/MSGPACK.md).
 JSON benchmark history lives in [bench/JSON.md](bench/JSON.md).
 TOML benchmark history lives in [bench/TOML.md](bench/TOML.md).
 CBOR benchmark history lives in [bench/CBOR.md](bench/CBOR.md).

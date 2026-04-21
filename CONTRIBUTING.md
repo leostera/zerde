@@ -32,6 +32,9 @@ zig build bench -Doptimize=ReleaseFast
 Run a single benchmark family:
 
 ```sh
+zig build bench-bin -Doptimize=ReleaseFast
+zig build bench-bson -Doptimize=ReleaseFast
+zig build bench-msgpack -Doptimize=ReleaseFast
 zig build bench-json -Doptimize=ReleaseFast
 zig build bench-toml -Doptimize=ReleaseFast
 zig build bench-cbor -Doptimize=ReleaseFast
@@ -44,14 +47,14 @@ The benchmark runner itself is built on `zBench`.
 
 ## Corpus Tests
 
-Corpus-based roundtrip tests live in `tests/corpus/json`, `tests/corpus/toml`, `tests/corpus/yaml`, and `tests/corpus/cbor`.
+Corpus-based roundtrip tests live in `tests/corpus/bin`, `tests/corpus/bson`, `tests/corpus/cbor`, `tests/corpus/json`, `tests/corpus/msgpack`, `tests/corpus/toml`, and `tests/corpus/yaml`.
 Each fixture is treated as a canonical source file: parse it into a typed value, serialize it back out, and require an exact byte-for-byte match.
 The corpora are feature-first, so fixture names should describe the wire shape being exercised rather than one shared app schema.
 
 When adding fixtures:
 
 - add the source file under `tests/corpus/<format>/`
-- prefer feature names like `null.json`, `empty.toml`, `array_float.yaml`, or `object_single.cbor`
+- prefer feature names like `null.json`, `empty.toml`, `array_float.yaml`, `object_single.cbor`, `object_nested.bson`, `enum_field.msgpack`, or `object_single.bin`
 - keep the file in `zerde`'s canonical output form for that format and config
 - use descriptive names so a failing generated test is easy to identify
 - run `zig build test` after adding or changing corpus fixtures
