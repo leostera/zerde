@@ -11,7 +11,7 @@ const zerde = @import("zerde");
 const StrawHat = struct {
     name: []const u8,
     bounty: u32,
-    role: enum { captain, navigator, cook },
+    role: enum { captain, navigator, cook, shipwright },
 
     pub const serde = .{
         .rename_all = .snake_case,
@@ -22,9 +22,9 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
     const crew_mate = StrawHat{
-        .name = "Nami",
-        .bounty = 366_000_000,
-        .role = .navigator,
+        .name = "Franky",
+        .bounty = 394_000_000,
+        .role = .shipwright,
     };
 
     var out: std.Io.Writer.Allocating = .init(allocator);
@@ -114,7 +114,7 @@ pub fn main() !void {
     defer out.deinit();
 
     try zerde.serializeWith(zerde.json, &out.writer, User{
-        .firstName = "Nami",
+        .firstName = "Franky",
         .createdAt = 42,
         .nickname = null,
     }, .{
