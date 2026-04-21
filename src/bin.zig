@@ -191,6 +191,10 @@ pub fn BinDeserializer(comptime Config: type) type {
             return self.can_borrow_strings;
         }
 
+        pub fn errorOffset(self: *Self) usize {
+            return self.index;
+        }
+
         pub fn readOptionalPresent(self: *Self) !bool {
             return switch (try self.readByte()) {
                 0x00 => false,

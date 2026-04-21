@@ -308,6 +308,10 @@ pub fn BsonDeserializer(comptime Config: type) type {
             return self.can_borrow_strings;
         }
 
+        pub fn errorOffset(self: *Self) usize {
+            return self.index;
+        }
+
         pub fn peekKind(self: *Self) !ValueKind {
             const tag = self.pending_type orelse return error.UnexpectedType;
             return switch (tag) {

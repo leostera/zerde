@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const diagnostic_mod = @import("diagnostic.zig");
 const typed = @import("typed.zig");
 const meta = @import("meta.zig");
 const Number = typed.Number;
@@ -228,6 +229,10 @@ pub fn JsonDeserializer(comptime Config: type) type {
 
         pub fn borrowStrings(self: *Self) bool {
             return self.can_borrow_strings;
+        }
+
+        pub fn errorLocation(self: *Self) diagnostic_mod.Location {
+            return diagnostic_mod.locationFromOffset(self.input, self.parser.index);
         }
 
         // The typed layer uses this to branch for optionals, enums, and skipping.

@@ -276,6 +276,10 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
             return self.can_borrow_strings;
         }
 
+        pub fn errorOffset(self: *Self) usize {
+            return self.index;
+        }
+
         pub fn peekKind(self: *Self) !ValueKind {
             const tag = try self.peekByte();
             return switch (classify(tag)) {

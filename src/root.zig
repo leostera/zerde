@@ -12,11 +12,15 @@ const json_impl = @import("json.zig");
 const msgpack_impl = @import("msgpack.zig");
 const toml_impl = @import("toml.zig");
 const yaml_impl = @import("yaml.zig");
+const diagnostic_impl = @import("diagnostic.zig");
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
 
 pub const FieldCase = meta.FieldCase;
 pub const SerdeConfig = meta.SerdeConfig;
+pub const Diagnostic = diagnostic_impl.Diagnostic;
+pub const DiagnosticLocation = diagnostic_impl.Location;
+pub const DiagnosticPathSegment = diagnostic_impl.PathSegment;
 
 pub const bin = bin_impl;
 pub const bson = bson_impl;
@@ -93,6 +97,40 @@ pub fn deserializeWith(
     return value;
 }
 
+/// Deserializes `T` while populating `diagnostic` with field-path and location context on failure.
+pub fn deserializeWithDiagnostics(
+    comptime Format: type,
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    diagnostic: *Diagnostic,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    diagnostic.clear();
+
+    if (!@hasDecl(Format, "readerDeserializer")) {
+        @compileError("format " ++ @typeName(Format) ++ " does not implement readerDeserializer()");
+    }
+
+    var deserializer = try Format.readerDeserializer(allocator, reader, format_cfg);
+    defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
+
+    const value = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
+        diagnostic.captureFromDeserializer(&deserializer);
+        return err;
+    };
+
+    if (@hasDecl(@TypeOf(deserializer), "finish")) {
+        deserializer.finish() catch |err| {
+            diagnostic.captureFromDeserializer(&deserializer);
+            return err;
+        };
+    }
+
+    return value;
+}
+
 /// Deserializes `T` with separate typed-layer and format-layer configuration into an internal arena.
 pub fn deserializeOwnedWith(
     comptime Format: type,
@@ -143,6 +181,40 @@ pub fn parseSliceWith(
     defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
     const value = try typed.deserialize(T, allocator, &deserializer, serde_cfg);
     if (@hasDecl(@TypeOf(deserializer), "finish")) try deserializer.finish();
+    return value;
+}
+
+/// Parses `T` from a slice while populating `diagnostic` with field-path and location context on failure.
+pub fn parseSliceWithDiagnostics(
+    comptime Format: type,
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    diagnostic: *Diagnostic,
+    comptime serde_cfg: anytype,
+    comptime format_cfg: anytype,
+) !T {
+    diagnostic.clear();
+
+    if (!@hasDecl(Format, "sliceDeserializer")) {
+        @compileError("format " ++ @typeName(Format) ++ " does not implement sliceDeserializer()");
+    }
+
+    var deserializer = try Format.sliceDeserializer(allocator, input, format_cfg);
+    defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
+
+    const value = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
+        diagnostic.captureFromDeserializer(&deserializer);
+        return err;
+    };
+
+    if (@hasDecl(@TypeOf(deserializer), "finish")) {
+        deserializer.finish() catch |err| {
+            diagnostic.captureFromDeserializer(&deserializer);
+            return err;
+        };
+    }
+
     return value;
 }
 
@@ -396,6 +468,41 @@ test "generic msgpack entrypoint works" {
     defer typed.free(std.testing.allocator, decoded);
 
     try std.testing.expectEqualDeep(expected, decoded);
+}
+
+test "parseSliceWithDiagnostics captures json path and location" {
+    const Example = struct {
+        crew: []const struct {
+            bounty: u32,
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    var captured_err: anyerror = undefined;
+    if (parseSliceWithDiagnostics(
+        json,
+        Example,
+        std.testing.allocator,
+        "{\"crew\":[{\"bounty\":\"oops\"}]}",
+        &diagnostic,
+        .{},
+        .{},
+    )) |_| {
+        return error.TestUnexpectedSuccess;
+    } else |decode_err| {
+        captured_err = decode_err;
+    }
+
+    try std.testing.expectEqual(error.InvalidNumber, captured_err);
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try diagnostic.format(&out.writer, captured_err);
+
+    try std.testing.expectEqualStrings(
+        "InvalidNumber at root.crew[0].bounty (offset 19, line 1, column 20)",
+        out.written(),
+    );
 }
 
 test {
