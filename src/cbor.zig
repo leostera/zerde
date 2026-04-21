@@ -249,6 +249,7 @@ pub fn CborDeserializer(comptime Config: type) type {
         }
 
         pub fn readString(self: *Self, allocator: Allocator) !StringToken {
+            _ = allocator;
             const header = try self.readResolvedHeader();
             if (header.major != 2 and header.major != 3) return error.UnexpectedType;
             if (header.indefinite) return error.UnsupportedIndefiniteString;
@@ -258,16 +259,9 @@ pub fn CborDeserializer(comptime Config: type) type {
             const raw = self.input[self.index .. self.index + len];
             self.index += len;
 
-            if (self.can_borrow_strings) {
-                return .{
-                    .bytes = raw,
-                    .allocated = false,
-                };
-            }
-
             return .{
-                .bytes = try allocator.dupe(u8, raw),
-                .allocated = true,
+                .bytes = raw,
+                .allocated = false,
             };
         }
 
@@ -749,6 +743,36 @@ test "parseSliceAliased reuses cbor string bytes from input" {
     const end = begin + input.len;
     const ptr = @intFromPtr(decoded.message.ptr);
     try std.testing.expect(ptr >= begin and ptr < end);
+}
+
+test "parseSlice keeps cbor strings owned at the typed edge" {
+    const Example = struct {
+        message: []const u8,
+    };
+
+    const input = [_]u8{
+        0xa1,
+        0x67,
+        'm',
+        'e',
+        's',
+        's',
+        'a',
+        'g',
+        'e',
+        0x62,
+        'o',
+        'k',
+    };
+
+    const decoded = try parseSlice(Example, std.testing.allocator, &input);
+    defer typed.free(std.testing.allocator, decoded);
+    try std.testing.expectEqualStrings("ok", decoded.message);
+
+    const begin = @intFromPtr(input[0..].ptr);
+    const end = begin + input.len;
+    const ptr = @intFromPtr(decoded.message.ptr);
+    try std.testing.expect(ptr < begin or ptr >= end);
 }
 
 test "parse definite cbor map with snake_case fields" {

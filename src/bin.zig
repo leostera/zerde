@@ -297,21 +297,15 @@ pub fn BinDeserializer(comptime Config: type) type {
         }
 
         fn readLengthPrefixedBytes(self: *Self, allocator: Allocator) !StringToken {
+            _ = allocator;
             const len = try self.readVarUInt();
             if (self.input.len - self.index < len) return error.UnexpectedEndOfInput;
             const bytes = self.input[self.index .. self.index + len];
             self.index += len;
 
-            if (self.can_borrow_strings) {
-                return .{
-                    .bytes = bytes,
-                    .allocated = false,
-                };
-            }
-
             return .{
-                .bytes = try allocator.dupe(u8, bytes),
-                .allocated = true,
+                .bytes = bytes,
+                .allocated = false,
             };
         }
 
@@ -550,4 +544,23 @@ test "parseSliceAliased reuses binary string bytes from input" {
     const end = begin + out.written().len;
     const ptr = @intFromPtr(decoded.message.ptr);
     try std.testing.expect(ptr >= begin and ptr < end);
+}
+
+test "parseSlice keeps binary strings owned at the typed edge" {
+    const Example = struct {
+        message: []const u8,
+    };
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try serialize(&out.writer, Example{ .message = "Nami" });
+
+    const decoded = try parseSlice(Example, std.testing.allocator, out.written());
+    defer typed.free(std.testing.allocator, decoded);
+    try std.testing.expectEqualStrings("Nami", decoded.message);
+
+    const begin = @intFromPtr(out.written().ptr);
+    const end = begin + out.written().len;
+    const ptr = @intFromPtr(decoded.message.ptr);
+    try std.testing.expect(ptr < begin or ptr >= end);
 }

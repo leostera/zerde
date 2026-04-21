@@ -460,20 +460,14 @@ pub fn MsgpackDeserializer(comptime Config: type) type {
         }
 
         fn readStringLike(self: *Self, allocator: Allocator, len: usize) !StringToken {
+            _ = allocator;
             if (self.input.len - self.index < len) return error.UnexpectedEndOfInput;
             const raw = self.input[self.index .. self.index + len];
             self.index += len;
 
-            if (self.can_borrow_strings) {
-                return .{
-                    .bytes = raw,
-                    .allocated = false,
-                };
-            }
-
             return .{
-                .bytes = try allocator.dupe(u8, raw),
-                .allocated = true,
+                .bytes = raw,
+                .allocated = false,
             };
         }
 
@@ -1039,6 +1033,36 @@ test "parseSliceAliased reuses msgpack string bytes from input" {
     const end = begin + input.len;
     const ptr = @intFromPtr(decoded.message.ptr);
     try std.testing.expect(ptr >= begin and ptr < end);
+}
+
+test "parseSlice keeps msgpack strings owned at the typed edge" {
+    const Example = struct {
+        message: []const u8,
+    };
+
+    const input = [_]u8{
+        0x81,
+        0xa7,
+        'm',
+        'e',
+        's',
+        's',
+        'a',
+        'g',
+        'e',
+        0xa2,
+        'o',
+        'k',
+    };
+
+    const decoded = try parseSlice(Example, std.testing.allocator, &input);
+    defer typed.free(std.testing.allocator, decoded);
+    try std.testing.expectEqualStrings("ok", decoded.message);
+
+    const begin = @intFromPtr(input[0..].ptr);
+    const end = begin + input.len;
+    const ptr = @intFromPtr(decoded.message.ptr);
+    try std.testing.expect(ptr < begin or ptr >= end);
 }
 
 test "parse msgpack bin into fixed byte array" {
