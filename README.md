@@ -122,3 +122,17 @@ pub fn main() !void {
     }, .{});
 }
 ```
+
+## Errors
+
+`zerde` can attach field-path and byte-location context to parse failures with
+`parseSliceWithDiagnostics` and `deserializeWithDiagnostics`.
+
+Use this when you need errors like `InvalidNumber at root.crew[0].bounty (offset
+19, line 1, column 20)` instead of a bare format error.
+
+`Diagnostic` records:
+
+- the structured field path
+- byte offset for all formats
+- line and column for text formats that can report them directly

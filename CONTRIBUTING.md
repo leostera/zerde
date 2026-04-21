@@ -44,6 +44,14 @@ zig build bench-yaml -Doptimize=ReleaseFast
 Benchmark workflow and benchmark-log conventions live in [bench/README.md](bench/README.md).
 That file also defines benchmark fairness policy: time the full public usage path, including any mandatory intermediate-representation conversion required by a compared library.
 The benchmark runner itself is built on `zBench`.
+GitHub Actions mirrors this setup with `.github/workflows/ci.yml` for `zig build test`
+and `.github/workflows/bench.yml` for benchmark runs on `main` and manual dispatches.
+
+## Parse Diagnostics
+
+Use `zerde.parseSliceWithDiagnostics(...)` or
+`zerde.deserializeWithDiagnostics(...)` when you need error context that points
+at a specific field path and input location.
 
 ## Corpus Tests
 
