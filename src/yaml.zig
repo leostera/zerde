@@ -8,6 +8,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
 const read_impl = @import("yaml_read.zig");
+const root = @import("root.zig");
+const diagnostic_mod = @import("diagnostic.zig");
 
 pub const ReadConfig = read_impl.ReadConfig;
 pub const WriteConfig = struct {
@@ -609,4 +611,19 @@ pub fn serializeWith(
     comptime format_cfg: anytype,
 ) !void {
     try typed.serialize(@This(), writer, value, serde_cfg, format_cfg);
+}
+
+test "parseSliceWithDiagnostics reports the offset of a tab in yaml indentation" {
+    const Doc = struct { a: u8, b: u8 };
+    var diagnostic: diagnostic_mod.Diagnostic = .{};
+    try std.testing.expectError(error.InvalidYamlIndentation, root.parseSliceWithDiagnostics(
+        @This(),
+        Doc,
+        std.testing.allocator,
+        "a: 1\n\tb: 2",
+        &diagnostic,
+        .{},
+        .{},
+    ));
+    try std.testing.expectEqual(@as(?usize, 5), diagnostic.location.offset);
 }

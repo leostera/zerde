@@ -230,11 +230,13 @@ pub fn YamlDeserializer(comptime Config: type) type {
             cfg: Config,
             diagnostic: ?*diagnostic_mod.Diagnostic,
         ) !Self {
-            var parser = Parser.init(allocator, input, effectiveBorrowStrings(cfg)) catch |err| {
-                if (diagnostic) |d| d.location.offset = 0;
+            var parser = Parser{ .input = input, .borrow_strings = effectiveBorrowStrings(cfg) };
+            defer parser.deinit(allocator);
+            parser.loadLines(allocator) catch |err| {
+                // Allocation failures have no input position, so the offset stays unset for them.
+                if (diagnostic) |d| d.location.offset = parser.failure_offset;
                 return err;
             };
-            defer parser.deinit(allocator);
 
             const root = parser.parseDocument(allocator) catch |err| {
                 if (diagnostic) |d| d.location.offset = parser.errorOffset();
@@ -413,15 +415,8 @@ const Parser = struct {
     borrow_strings: bool,
     lines: std.ArrayList(Line) = .empty,
     line_index: usize = 0,
-
-    fn init(allocator: Allocator, input: []const u8, borrow_strings: bool) !Parser {
-        var parser = Parser{
-            .input = input,
-            .borrow_strings = borrow_strings,
-        };
-        try parser.loadLines(allocator);
-        return parser;
-    }
+    /// Input offset at which `loadLines` rejected the document, if the failure has a position.
+    failure_offset: ?usize = null,
 
     fn deinit(self: *Parser, allocator: Allocator) void {
         self.lines.deinit(allocator);
@@ -704,19 +699,22 @@ const Parser = struct {
             const end = std.mem.indexOfScalarPos(u8, self.input, start, '\n') orelse self.input.len;
             var line = self.input[start..end];
             if (line.len != 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
-            try self.appendLine(allocator, line);
+            try self.appendLine(allocator, line, start);
             if (end == self.input.len) break;
             start = end + 1;
         }
     }
 
-    fn appendLine(self: *Parser, allocator: Allocator, raw_line: []const u8) ParseError!void {
+    fn appendLine(self: *Parser, allocator: Allocator, raw_line: []const u8, line_start: usize) ParseError!void {
         const trimmed_right = trimRightSpaces(raw_line);
         if (trimmed_right.len == 0) return;
 
         var indent: usize = 0;
         while (indent < trimmed_right.len and trimmed_right[indent] == ' ') : (indent += 1) {}
-        if (indent < trimmed_right.len and trimmed_right[indent] == '\t') return error.InvalidYamlIndentation;
+        if (indent < trimmed_right.len and trimmed_right[indent] == '\t') {
+            self.failure_offset = line_start + indent;
+            return error.InvalidYamlIndentation;
+        }
 
         const content = trimmed_right[indent..];
         if (content.len == 0) return;
