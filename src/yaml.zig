@@ -94,7 +94,8 @@ pub fn YamlSerializer(comptime Config: type) type {
 
         pub fn serializeSequence(self: *Self, comptime Sequence: type, value: Sequence, comptime cfg: anytype) !bool {
             _ = cfg;
-            if (!isInlineSequenceType(Sequence)) return false;
+            // An empty sequence has no items to put on separate lines, so it is always written inline.
+            if (!isInlineSequenceType(Sequence) and !isEmptySequence(Sequence, value)) return false;
 
             try self.prepareValuePrefix();
             try self.writeInlineValue(Sequence, value);
@@ -403,7 +404,15 @@ fn isCompoundValue(comptime T: type, value: T) bool {
             isCompoundValue(@TypeOf(child), child)
         else
             false,
-        else => isCompoundType(T),
+        else => isCompoundType(T) and !isEmptySequence(T, value),
+    };
+}
+
+fn isEmptySequence(comptime T: type, value: T) bool {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.child != u8 and value.len == 0,
+        .pointer => |info| info.size == .slice and info.child != u8 and value.len == 0,
+        else => false,
     };
 }
 
@@ -435,15 +444,7 @@ fn isInlineSequenceElementType(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => true,
         .optional => |info| isInlineSequenceElementType(info.child),
-        .array, .pointer => isInlineSequenceType(T) or isStringType(T),
-        else => false,
-    };
-}
-
-fn isStringType(comptime T: type) bool {
-    return switch (@typeInfo(T)) {
-        .array => |info| info.child == u8,
-        .pointer => |info| info.size == .slice and info.child == u8,
+        .array, .pointer => isInlineSequenceType(T),
         else => false,
     };
 }
