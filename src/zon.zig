@@ -74,7 +74,7 @@ pub fn ZonSerializer(comptime Config: type) type {
         }
 
         pub fn emitString(self: *Self, value: []const u8) !void {
-            try self.low.string(value);
+            try self.low.string(value, .{});
         }
 
         pub fn emitBytes(self: *Self, value: []const u8) !void {
