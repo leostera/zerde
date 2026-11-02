@@ -27,8 +27,8 @@ pub const JsonConfig = SerdeConfig;
 pub fn hasField(comptime T: type, comptime name: []const u8) bool {
     return switch (@typeInfo(T)) {
         .@"struct" => |info| blk: {
-            inline for (info.fields) |field| {
-                if (std.mem.eql(u8, field.name, name)) break :blk true;
+            inline for (info.field_names) |field_name| {
+                if (std.mem.eql(u8, field_name, name)) break :blk true;
             }
             break :blk false;
         },

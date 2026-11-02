@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- ported the library, tests, examples, transcoder CLI, and benchmark harness to Zig 0.17.0; `minimum_zig_version` is now `0.17.0`
+- adapted the typed reflection layer to the 0.17 `@typeInfo` shape (`field_names`, `field_types`, `field_attrs`, `attrs.@"const"`)
+- adapted the ZON backend to the 0.17 `std.zig.Ast`, `Zoir`, and `std.zon.Serializer` signatures
+- CI installs Zig 0.17.0
+- updated the `toml` (`zig-toml`), `zbor`, and `zbench` dependencies to 0.17-compatible commits
+- patched the vendored `bufzilla`, `msgpack-zig`, `zig-bson`, and `zig-yaml` benchmark baselines for 0.17
+- `zig build test` now runs the corpus, invalid-input, fuzz, and property test modules; Zig only collects tests from the test root's own module, so these were not being run before
+- fixed a double free in the ZON reader when a document has compile errors
+- TOML and YAML parse failures now report the failing input offset in `Diagnostic`
+- YAML now writes empty arrays as `[]` (inline) and reads an empty document as an empty struct
+- corrected corpus fixtures: no trailing newline for JSON, YAML, and ZON, MessagePack and BSON strings encoded as str rather than bin, and YAML string arrays as block sequences
+
 ## 0.1.0
 
 First public release of `zerde`.

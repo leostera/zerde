@@ -14,6 +14,7 @@ pub const WriteConfig = struct {};
 
 pub const readerDeserializer = read_impl.readerDeserializer;
 pub const sliceDeserializer = read_impl.sliceDeserializer;
+pub const sliceDeserializerWithDiagnostic = read_impl.sliceDeserializerWithDiagnostic;
 pub const deserialize = read_impl.deserialize;
 pub const deserializeWith = read_impl.deserializeWith;
 pub const parseSlice = read_impl.parseSlice;
@@ -521,9 +522,10 @@ fn writeEscapedTomlByte(writer: *std.Io.Writer, byte: u8) !void {
 }
 
 fn writeQuotedEnumTag(writer: *std.Io.Writer, comptime Enum: type, value: Enum) !void {
-    inline for (@typeInfo(Enum).@"enum".fields) |field| {
-        if (@intFromEnum(value) == field.value) {
-            try writer.writeAll(std.fmt.comptimePrint("\"{s}\"", .{field.name}));
+    const info = @typeInfo(Enum).@"enum";
+    inline for (info.field_names, info.field_values) |field_name, field_value| {
+        if (@backingInt(value) == field_value) {
+            try writer.writeAll(std.fmt.comptimePrint("\"{s}\"", .{field_name}));
             return;
         }
     }

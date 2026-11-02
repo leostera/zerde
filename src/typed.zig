@@ -163,14 +163,14 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
             if (@hasDecl(SerializerType, "beginStructSized")) {
                 var field_count: usize = 0;
                 inline for (0..pass_count) |pass| {
-                    inline for (info.fields) |field| {
-                        if (field.is_comptime) {
-                            @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
+                    inline for (info.field_names, info.field_types, info.field_attrs) |field_name, field_type, field_attrs| {
+                        if (field_attrs.@"comptime") {
+                            @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
                         }
 
-                        if (SerializerType.includeStructField(T, field.type, pass)) {
-                            const field_value = @field(value, field.name);
-                            const skip_field = meta.effectiveOmitNullFields(T, cfg) and @typeInfo(field.type) == .optional and field_value == null;
+                        if (SerializerType.includeStructField(T, field_type, pass)) {
+                            const field_value = @field(value, field_name);
+                            const skip_field = meta.effectiveOmitNullFields(T, cfg) and @typeInfo(field_type) == .optional and field_value == null;
                             if (!skip_field) field_count += 1;
                         }
                     }
@@ -180,25 +180,25 @@ fn serializeValue(serializer: anytype, value: anytype, comptime cfg: anytype) !v
                 try serializer.beginStruct(T);
             }
             inline for (0..pass_count) |pass| {
-                inline for (info.fields) |field| {
-                    if (field.is_comptime) {
-                        @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
+                inline for (info.field_names, info.field_types, info.field_attrs) |field_name, field_type, field_attrs| {
+                    if (field_attrs.@"comptime") {
+                        @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
                     }
 
-                    if (SerializerType.includeStructField(T, field.type, pass)) {
-                        const field_value = @field(value, field.name);
+                    if (SerializerType.includeStructField(T, field_type, pass)) {
+                        const field_value = @field(value, field_name);
                         // Null omission is decided by the typed layer so formats do not duplicate that policy.
-                        const skip_field = meta.effectiveOmitNullFields(T, cfg) and @typeInfo(field.type) == .optional and field_value == null;
+                        const skip_field = meta.effectiveOmitNullFields(T, cfg) and @typeInfo(field_type) == .optional and field_value == null;
                         if (!skip_field) {
-                            const emitted_name = comptime meta.effectiveFieldName(T, field.name, cfg);
+                            const emitted_name = comptime meta.effectiveFieldName(T, field_name, cfg);
                             const emit_value = if (@hasDecl(SerializerType, "beginStructFieldValue"))
-                                try serializer.beginStructFieldValue(T, emitted_name, field.type, field_value)
+                                try serializer.beginStructFieldValue(T, emitted_name, field_type, field_value)
                             else
-                                try serializer.beginStructField(T, emitted_name, field.type);
+                                try serializer.beginStructField(T, emitted_name, field_type);
                             if (emit_value) {
                                 try serializeValue(serializer, field_value, cfg);
                             }
-                            try serializer.endStructField(T, emitted_name, field.type);
+                            try serializer.endStructField(T, emitted_name, field_type);
                         }
                     }
                 }
@@ -367,7 +367,7 @@ fn deserializePointer(
                     return token.bytes;
                 }
                 if (token.allocated) {
-                    return if (info.is_const) token.bytes else @constCast(token.bytes);
+                    return if (info.attrs.@"const") token.bytes else @constCast(token.bytes);
                 }
                 defer token.deinit(allocator);
                 return allocator.dupe(info.child, token.bytes);
@@ -467,15 +467,15 @@ fn deserializeStruct(
         try deserializer.beginStructOrdered(T);
 
         var ordered_result: T = undefined;
-        var ordered_seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
+        var ordered_seen: [info.field_names.len]bool = @splat(false);
         errdefer freePartialStruct(T, allocator, &ordered_result, &ordered_seen, borrowed_strings);
 
-        inline for (info.fields, 0..) |struct_field, i| {
-            if (struct_field.is_comptime) {
-                @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ struct_field.name);
+        inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| {
+            if (field_attrs.@"comptime") {
+                @compileError("comptime struct fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
             }
 
-            @field(ordered_result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field.name);
+            @field(ordered_result, field_name) = try deserializeFieldValue(field_type, allocator, deserializer, cfg, diagnostics, track_diagnostics, field_name);
             ordered_seen[i] = true;
         }
 
@@ -486,7 +486,7 @@ fn deserializeStruct(
     try deserializer.beginObject();
 
     var result: T = undefined;
-    var seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
+    var seen: [info.field_names.len]bool = @splat(false);
     errdefer freePartialStruct(T, allocator, &result, &seen, borrowed_strings);
 
     if (@hasDecl(DeserializerType, "nextObjectFieldIndex")) {
@@ -498,10 +498,10 @@ fn deserializeStruct(
                     try deserializer.skipValue(allocator);
                 },
                 .field_index => |field_index| {
-                    inline for (info.fields, 0..) |struct_field, i| {
+                    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
                         if (field_index == i) {
                             if (seen[i]) return error.DuplicateField;
-                            @field(result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field.name);
+                            @field(result, field_name) = try deserializeFieldValue(field_type, allocator, deserializer, cfg, diagnostics, track_diagnostics, field_name);
                             seen[i] = true;
                         }
                     }
@@ -509,12 +509,12 @@ fn deserializeStruct(
             }
         }
 
-        inline for (info.fields, 0..) |struct_field, i| {
+        inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| {
             if (!seen[i]) {
-                if (struct_field.defaultValue()) |default_value| {
-                    @field(result, struct_field.name) = default_value;
-                } else if (@typeInfo(struct_field.type) == .optional) {
-                    @field(result, struct_field.name) = null;
+                if (field_attrs.defaultValue(field_type)) |default_value| {
+                    @field(result, field_name) = default_value;
+                } else if (@typeInfo(field_type) == .optional) {
+                    @field(result, field_name) = null;
                 } else {
                     return error.MissingField;
                 }
@@ -524,14 +524,14 @@ fn deserializeStruct(
         return result;
     }
 
-    while (try deserializer.nextObjectField(allocator)) |field_name| {
-        defer field_name.deinit(allocator);
+    while (try deserializer.nextObjectField(allocator)) |object_field| {
+        defer object_field.deinit(allocator);
 
-        if (matchStructFieldIndexInfo(T, info, cfg, field_name.bytes)) |field_index| {
-            inline for (info.fields, 0..) |struct_field, i| {
+        if (matchStructFieldIndexInfo(T, info, cfg, object_field.bytes)) |field_index| {
+            inline for (info.field_names, info.field_types, 0..) |struct_field_name, field_type, i| {
                 if (field_index == i) {
                     if (seen[i]) return error.DuplicateField;
-                    @field(result, struct_field.name) = try deserializeFieldValue(struct_field.type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field.name);
+                    @field(result, struct_field_name) = try deserializeFieldValue(field_type, allocator, deserializer, cfg, diagnostics, track_diagnostics, struct_field_name);
                     seen[i] = true;
                 }
             }
@@ -543,12 +543,12 @@ fn deserializeStruct(
     }
 
     // Missing-field defaults are resolved after the object is fully consumed.
-    inline for (info.fields, 0..) |struct_field, i| {
+    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| {
         if (!seen[i]) {
-            if (struct_field.defaultValue()) |default_value| {
-                @field(result, struct_field.name) = default_value;
-            } else if (@typeInfo(struct_field.type) == .optional) {
-                @field(result, struct_field.name) = null;
+            if (field_attrs.defaultValue(field_type)) |default_value| {
+                @field(result, field_name) = default_value;
+            } else if (@typeInfo(field_type) == .optional) {
+                @field(result, field_name) = null;
             } else {
                 return error.MissingField;
             }
@@ -600,8 +600,8 @@ fn matchStructFieldIndexInfo(
     comptime cfg: anytype,
     actual: []const u8,
 ) ?usize {
-    inline for (info.fields, 0..) |field, i| {
-        const expected_name = meta.effectiveFieldName(T, field.name, cfg);
+    inline for (info.field_names, 0..) |field_name, i| {
+        const expected_name = meta.effectiveFieldName(T, field_name, cfg);
         if (expected_name.len == actual.len and isFirstFieldWithNameLen(T, info, cfg, i)) {
             return matchStructFieldIndexByLen(T, info, cfg, actual, expected_name.len);
         }
@@ -617,8 +617,8 @@ fn matchStructFieldIndexByLen(
     actual: []const u8,
     len: usize,
 ) ?usize {
-    inline for (info.fields, 0..) |field, i| {
-        const expected_name = meta.effectiveFieldName(T, field.name, cfg);
+    inline for (info.field_names, 0..) |field_name, i| {
+        const expected_name = meta.effectiveFieldName(T, field_name, cfg);
         if (expected_name.len == len and std.mem.eql(u8, actual, expected_name)) {
             return i;
         }
@@ -633,10 +633,9 @@ fn isFirstFieldWithNameLen(
     comptime cfg: anytype,
     comptime field_index: usize,
 ) bool {
-    const field = info.fields[field_index];
-    const field_name = meta.effectiveFieldName(T, field.name, cfg);
-    inline for (info.fields[0..field_index]) |prior_field| {
-        if (meta.effectiveFieldName(T, prior_field.name, cfg).len == field_name.len) {
+    const field_name = meta.effectiveFieldName(T, info.field_names[field_index], cfg);
+    inline for (info.field_names[0..field_index]) |prior_field_name| {
+        if (meta.effectiveFieldName(T, prior_field_name, cfg).len == field_name.len) {
             return false;
         }
     }
@@ -673,9 +672,9 @@ fn freeTypedPartial(comptime T: type, allocator: Allocator, value: T, borrowed_s
             else => {},
         },
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                if (!field.is_comptime) {
-                    freeTypedPartial(field.type, allocator, @field(value, field.name), borrowed_strings);
+            inline for (info.field_names, info.field_types, info.field_attrs) |field_name, field_type, field_attrs| {
+                if (!field_attrs.@"comptime") {
+                    freeTypedPartial(field_type, allocator, @field(value, field_name), borrowed_strings);
                 }
             }
         },
@@ -687,10 +686,11 @@ fn freePartialStruct(
     comptime T: type,
     allocator: Allocator,
     result: *T,
-    seen: *[@typeInfo(T).@"struct".fields.len]bool,
+    seen: *[@typeInfo(T).@"struct".field_names.len]bool,
     borrowed_strings: bool,
 ) void {
-    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
-        if (seen[i]) freeTypedPartial(field.type, allocator, @field(result.*, field.name), borrowed_strings);
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+        if (seen[i]) freeTypedPartial(field_type, allocator, @field(result.*, field_name), borrowed_strings);
     }
 }

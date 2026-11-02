@@ -482,7 +482,7 @@ fn writeZonValue(serializer: *std.zon.Serializer, value: Value) !void {
         .bool => |bool_value| try serializer.writer.print("{}", .{bool_value}),
         .integer => |integer_value| try serializer.int(integer_value),
         .float => |float_value| try serializer.float(float_value),
-        .string => |token| try serializer.string(token.bytes),
+        .string => |token| try serializer.string(token.bytes, .{}),
         .bytes => |token| {
             var tuple = try serializer.beginTuple(.{
                 .whitespace_style = .{ .fields = token.bytes.len },

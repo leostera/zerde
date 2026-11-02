@@ -5,6 +5,9 @@ const NonOptional = @import("utils.zig").NonOptional;
 const Optional = @import("utils.zig").Optional;
 const isOptional = @import("utils.zig").isOptional;
 const NoAllocator = @import("utils.zig").NoAllocator;
+const Field = @import("utils.zig").Field;
+const structFields = @import("utils.zig").structFields;
+const unionFields = @import("utils.zig").unionFields;
 
 const maybePackNull = @import("null.zig").maybePackNull;
 const maybeUnpackNull = @import("null.zig").maybeUnpackNull;
@@ -63,8 +66,7 @@ fn strPrefix(src: []const u8, len: usize) []const u8 {
 }
 
 pub fn packUnionAsMap(writer: *std.Io.Writer, comptime T: type, value: T, opts: UnionAsMapOptions) !void {
-    const type_info = @typeInfo(T);
-    const fields = type_info.@"union".fields;
+    const fields = comptime unionFields(T);
 
     const TagType = @typeInfo(T).@"union".tag_type.?;
 
@@ -89,8 +91,7 @@ pub fn packUnionAsMap(writer: *std.Io.Writer, comptime T: type, value: T, opts: 
 }
 
 pub fn packUnionAsTagged(writer: *std.Io.Writer, comptime T: type, value: T, opts: UnionAsTaggedOptions) !void {
-    const type_info = @typeInfo(T);
-    const fields = type_info.@"union".fields;
+    const fields = comptime unionFields(T);
 
     const TagType = @typeInfo(T).@"union".tag_type.?;
 
@@ -99,7 +100,7 @@ pub fn packUnionAsTagged(writer: *std.Io.Writer, comptime T: type, value: T, opt
             const field_value = @field(value, field.name);
             const field_type_info = @typeInfo(field.type);
 
-            const field_count = if (field_type_info == .@"struct") field_type_info.@"struct".fields.len else 0;
+            const field_count = if (field_type_info == .@"struct") comptime structFields(field.type).len else 0;
 
             try packMapHeader(writer, field_count + 1);
 
@@ -117,7 +118,7 @@ pub fn packUnionAsTagged(writer: *std.Io.Writer, comptime T: type, value: T, opt
             }
 
             if (field_type_info == .@"struct") {
-                inline for (field_type_info.@"struct".fields) |struct_field| {
+                inline for (comptime structFields(field.type)) |struct_field| {
                     try packString(writer, struct_field.name);
                     try packAny(writer, @field(field_value, struct_field.name));
                 }
@@ -161,8 +162,7 @@ pub fn unpackUnionAsMap(reader: *std.Io.Reader, allocator: std.mem.Allocator, co
     }
 
     const Type = NonOptional(T);
-    const type_info = @typeInfo(Type);
-    const fields = type_info.@"union".fields;
+    const fields = comptime unionFields(Type);
 
     var field_name_buffer: [256]u8 = undefined;
 
@@ -221,8 +221,7 @@ pub fn unpackUnionAsTagged(reader: *std.Io.Reader, allocator: std.mem.Allocator,
     }
 
     const Type = NonOptional(T);
-    const type_info = @typeInfo(Type);
-    const fields = type_info.@"union".fields;
+    const fields = comptime unionFields(Type);
 
     var tag_field_buffer: [256]u8 = undefined;
     var tag_value_buffer: [256]u8 = undefined;

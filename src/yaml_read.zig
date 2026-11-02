@@ -5,6 +5,7 @@
 //! flow sequences of scalar values, plain scalars, and quoted scalars.
 
 const std = @import("std");
+const diagnostic_mod = @import("diagnostic.zig");
 const Allocator = std.mem.Allocator;
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
@@ -128,6 +129,16 @@ const Line = struct {
     content: []const u8,
 };
 
+/// Like `sliceDeserializer`, but records the failing input offset in `diagnostic` when the document does not parse.
+pub fn sliceDeserializerWithDiagnostic(
+    allocator: Allocator,
+    input: []const u8,
+    comptime cfg: anytype,
+    diagnostic: *diagnostic_mod.Diagnostic,
+) !YamlDeserializer(@TypeOf(cfg)) {
+    return YamlDeserializer(@TypeOf(cfg)).initWithDiagnostic(allocator, input, false, cfg, diagnostic);
+}
+
 pub fn readerDeserializer(allocator: Allocator, reader: *std.Io.Reader, comptime cfg: anytype) !YamlDeserializer(@TypeOf(cfg)) {
     const input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
     return YamlDeserializer(@TypeOf(cfg)).init(allocator, input, true, cfg);
@@ -203,18 +214,40 @@ pub fn YamlDeserializer(comptime Config: type) type {
         current: ?*const Node = null,
         stack: [128]Frame = undefined,
         stack_len: usize = 0,
+        empty_document: bool = false,
+        empty_table: Table = .{},
 
         const Self = @This();
 
         fn init(allocator: Allocator, input: []const u8, owns_input: bool, cfg: Config) !Self {
-            var parser = try Parser.init(allocator, input, effectiveBorrowStrings(cfg));
-            defer parser.deinit(allocator);
+            return initWithDiagnostic(allocator, input, owns_input, cfg, null);
+        }
 
+        fn initWithDiagnostic(
+            allocator: Allocator,
+            input: []const u8,
+            owns_input: bool,
+            cfg: Config,
+            diagnostic: ?*diagnostic_mod.Diagnostic,
+        ) !Self {
+            var parser = Parser{ .input = input, .borrow_strings = effectiveBorrowStrings(cfg) };
+            defer parser.deinit(allocator);
+            parser.loadLines(allocator) catch |err| {
+                // Allocation failures have no input position, so the offset stays unset for them.
+                if (diagnostic) |d| d.location.offset = parser.failure_offset;
+                return err;
+            };
+
+            const root = parser.parseDocument(allocator) catch |err| {
+                if (diagnostic) |d| d.location.offset = parser.errorOffset();
+                return err;
+            };
             return .{
                 .input = input,
                 .cfg = cfg,
                 .owns_input = owns_input,
-                .root = try parser.parseDocument(allocator),
+                .root = root,
+                .empty_document = parser.lines.items.len == 0,
             };
         }
 
@@ -316,6 +349,8 @@ pub fn YamlDeserializer(comptime Config: type) type {
         pub fn beginObject(self: *Self) !void {
             const table = switch (self.currentNode().*) {
                 .table => |value| value,
+                // An empty document is the serialized form of a struct without fields.
+                .null => if (self.empty_document and self.current == null) &self.empty_table else return error.UnexpectedType,
                 else => return error.UnexpectedType,
             };
 
@@ -380,18 +415,17 @@ const Parser = struct {
     borrow_strings: bool,
     lines: std.ArrayList(Line) = .empty,
     line_index: usize = 0,
-
-    fn init(allocator: Allocator, input: []const u8, borrow_strings: bool) !Parser {
-        var parser = Parser{
-            .input = input,
-            .borrow_strings = borrow_strings,
-        };
-        try parser.loadLines(allocator);
-        return parser;
-    }
+    /// Input offset at which `loadLines` rejected the document, if the failure has a position.
+    failure_offset: ?usize = null,
 
     fn deinit(self: *Parser, allocator: Allocator) void {
         self.lines.deinit(allocator);
+    }
+
+    /// Input offset of the line being parsed, or the end of input once all lines are consumed.
+    fn errorOffset(self: *const Parser) usize {
+        if (self.line_index >= self.lines.items.len) return self.input.len;
+        return @intFromPtr(self.lines.items[self.line_index].content.ptr) - @intFromPtr(self.input.ptr);
     }
 
     fn parseDocument(self: *Parser, allocator: Allocator) ParseError!Node {
@@ -665,19 +699,22 @@ const Parser = struct {
             const end = std.mem.indexOfScalarPos(u8, self.input, start, '\n') orelse self.input.len;
             var line = self.input[start..end];
             if (line.len != 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
-            try self.appendLine(allocator, line);
+            try self.appendLine(allocator, line, start);
             if (end == self.input.len) break;
             start = end + 1;
         }
     }
 
-    fn appendLine(self: *Parser, allocator: Allocator, raw_line: []const u8) ParseError!void {
+    fn appendLine(self: *Parser, allocator: Allocator, raw_line: []const u8, line_start: usize) ParseError!void {
         const trimmed_right = trimRightSpaces(raw_line);
         if (trimmed_right.len == 0) return;
 
         var indent: usize = 0;
         while (indent < trimmed_right.len and trimmed_right[indent] == ' ') : (indent += 1) {}
-        if (indent < trimmed_right.len and trimmed_right[indent] == '\t') return error.InvalidYamlIndentation;
+        if (indent < trimmed_right.len and trimmed_right[indent] == '\t') {
+            self.failure_offset = line_start + indent;
+            return error.InvalidYamlIndentation;
+        }
 
         const content = trimmed_right[indent..];
         if (content.len == 0) return;

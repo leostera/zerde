@@ -6,6 +6,7 @@
 //! pull-deserializer protocol that the typed layer already knows how to walk.
 
 const std = @import("std");
+const diagnostic_mod = @import("diagnostic.zig");
 const Allocator = std.mem.Allocator;
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
@@ -137,6 +138,16 @@ pub fn sliceDeserializer(allocator: Allocator, input: []const u8, comptime cfg: 
     return TomlDeserializer(@TypeOf(cfg)).init(allocator, input, false, false, cfg);
 }
 
+/// Like `sliceDeserializer`, but records the failing input offset in `diagnostic` when the document does not parse.
+pub fn sliceDeserializerWithDiagnostic(
+    allocator: Allocator,
+    input: []const u8,
+    comptime cfg: anytype,
+    diagnostic: *diagnostic_mod.Diagnostic,
+) !TomlDeserializer(@TypeOf(cfg)) {
+    return TomlDeserializer(@TypeOf(cfg)).initWithDiagnostic(allocator, input, false, false, cfg, diagnostic);
+}
+
 pub fn deserialize(comptime T: type, allocator: Allocator, reader: *std.Io.Reader) ParseError!T {
     return deserializeWith(T, allocator, reader, .{}, .{});
 }
@@ -205,8 +216,22 @@ pub fn TomlDeserializer(comptime Config: type) type {
         const Self = @This();
 
         fn init(allocator: Allocator, input: []const u8, owns_input: bool, can_borrow_strings: bool, cfg: Config) !Self {
+            return initWithDiagnostic(allocator, input, owns_input, can_borrow_strings, cfg, null);
+        }
+
+        fn initWithDiagnostic(
+            allocator: Allocator,
+            input: []const u8,
+            owns_input: bool,
+            can_borrow_strings: bool,
+            cfg: Config,
+            diagnostic: ?*diagnostic_mod.Diagnostic,
+        ) !Self {
             var parser = Parser{ .input = input };
-            const root_table = try parser.parseDocument(allocator);
+            const root_table = parser.parseDocument(allocator) catch |err| {
+                if (diagnostic) |d| d.location.offset = parser.index;
+                return err;
+            };
             return .{
                 .input = input,
                 .cfg = cfg,

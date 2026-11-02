@@ -44,7 +44,7 @@ pub fn packFloat(writer: *std.Io.Writer, comptime T: type, value_or_maybe_null: 
         else => @compileError("Unsupported float size"),
     }
 
-    const IntType = std.meta.Int(.unsigned, @bitSizeOf(TargetType));
+    const IntType = @Int(.unsigned, @bitSizeOf(TargetType));
     const int_value = @as(IntType, @bitCast(@as(TargetType, @floatCast(value))));
 
     var buf: [@sizeOf(IntType)]u8 = undefined;
@@ -57,7 +57,7 @@ pub fn readFloatValue(reader: *std.Io.Reader, comptime SourceFloat: type, compti
     var buf: [size]u8 = undefined;
     try reader.readSliceAll(&buf);
 
-    const IntType = std.meta.Int(.unsigned, @bitSizeOf(SourceFloat));
+    const IntType = @Int(.unsigned, @bitSizeOf(SourceFloat));
     const int_value = std.mem.readInt(IntType, &buf, .big);
 
     return @floatCast(@as(SourceFloat, @bitCast(int_value)));

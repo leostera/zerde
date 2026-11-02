@@ -8,6 +8,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
 const read_impl = @import("yaml_read.zig");
+const root = @import("root.zig");
+const diagnostic_mod = @import("diagnostic.zig");
 
 pub const ReadConfig = read_impl.ReadConfig;
 pub const WriteConfig = struct {
@@ -16,6 +18,7 @@ pub const WriteConfig = struct {
 
 pub const readerDeserializer = read_impl.readerDeserializer;
 pub const sliceDeserializer = read_impl.sliceDeserializer;
+pub const sliceDeserializerWithDiagnostic = read_impl.sliceDeserializerWithDiagnostic;
 pub const deserialize = read_impl.deserialize;
 pub const deserializeWith = read_impl.deserializeWith;
 pub const parseSlice = read_impl.parseSlice;
@@ -93,7 +96,8 @@ pub fn YamlSerializer(comptime Config: type) type {
 
         pub fn serializeSequence(self: *Self, comptime Sequence: type, value: Sequence, comptime cfg: anytype) !bool {
             _ = cfg;
-            if (!isInlineSequenceType(Sequence)) return false;
+            // An empty sequence has no items to put on separate lines, so it is always written inline.
+            if (!isInlineSequenceType(Sequence) and !isEmptySequence(Sequence, value)) return false;
 
             try self.prepareValuePrefix();
             try self.writeInlineValue(Sequence, value);
@@ -290,6 +294,7 @@ pub fn YamlSerializer(comptime Config: type) type {
         }
 
         fn writeInlineSequence(self: *Self, comptime T: type, value: T) !void {
+            if (value.len == 0) return self.writer.writeAll("[]");
             try self.writer.writeAll("[ ");
             switch (@typeInfo(T)) {
                 .array => {
@@ -401,7 +406,15 @@ fn isCompoundValue(comptime T: type, value: T) bool {
             isCompoundValue(@TypeOf(child), child)
         else
             false,
-        else => isCompoundType(T),
+        else => isCompoundType(T) and !isEmptySequence(T, value),
+    };
+}
+
+fn isEmptySequence(comptime T: type, value: T) bool {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.child != u8 and value.len == 0,
+        .pointer => |info| info.size == .slice and info.child != u8 and value.len == 0,
+        else => false,
     };
 }
 
@@ -598,4 +611,19 @@ pub fn serializeWith(
     comptime format_cfg: anytype,
 ) !void {
     try typed.serialize(@This(), writer, value, serde_cfg, format_cfg);
+}
+
+test "parseSliceWithDiagnostics reports the offset of a tab in yaml indentation" {
+    const Doc = struct { a: u8, b: u8 };
+    var diagnostic: diagnostic_mod.Diagnostic = .{};
+    try std.testing.expectError(error.InvalidYamlIndentation, root.parseSliceWithDiagnostics(
+        @This(),
+        Doc,
+        std.testing.allocator,
+        "a: 1\n\tb: 2",
+        &diagnostic,
+        .{},
+        .{},
+    ));
+    try std.testing.expectEqual(@as(?usize, 5), diagnostic.location.offset);
 }

@@ -73,8 +73,8 @@ pub fn printBinaryDiff(case_name: []const u8, expected: []const u8, actual: []co
         .{ case_name, expected.len, actual.len },
     );
     std.debug.print("first mismatch at byte {d}\\n", .{mismatch_index});
-    std.debug.print("expected hex: {f}\n", .{std.fmt.fmtSliceHexLower(expected_window)});
-    std.debug.print("actual hex:   {f}\n", .{std.fmt.fmtSliceHexLower(actual_window)});
+    std.debug.print("expected hex: {x}\n", .{expected_window});
+    std.debug.print("actual hex:   {x}\n", .{actual_window});
 }
 
 fn firstMismatch(expected: []const u8, actual: []const u8) ?usize {

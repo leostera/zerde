@@ -1640,8 +1640,8 @@ fn runZonScenario(io: std.Io, allocator: Allocator, bench_case: *ZonBenchCase) !
 
         pub fn run(self: *@This(), _: Allocator) void {
             _ = self.arena.reset(.retain_capacity);
-            const source = self.arena.allocator().dupeZ(u8, self.input) catch @panic("std.zon parse input allocation failed");
-            const value = std.zon.parse.fromSliceAlloc(StdPayload, self.arena.allocator(), source, null, .{}) catch @panic("std.zon parse failed");
+            const source = self.arena.allocator().dupeSentinel(u8, self.input, 0) catch @panic("std.zon parse input allocation failed");
+            const value = stdZonFromSlice(StdPayload, self.arena.allocator(), source) catch @panic("std.zon parse failed");
             consumeStdPayload(value);
         }
     };
@@ -1737,8 +1737,8 @@ fn runZonScenario(io: std.Io, allocator: Allocator, bench_case: *ZonBenchCase) !
             errdefer self.deinit();
 
             try std.zon.stringify.serialize(self.value, .{ .whitespace = false }, &self.out.writer);
-            const source = try self.arena.allocator().dupeZ(u8, self.out.written());
-            const check = try std.zon.parse.fromSliceAlloc(StdPayload, self.arena.allocator(), source, null, .{});
+            const source = try self.arena.allocator().dupeSentinel(u8, self.out.written(), 0);
+            const check = try stdZonFromSlice(StdPayload, self.arena.allocator(), source);
             try assertRoundTripEqual(StdPayload, self.value, check);
             _ = self.arena.reset(.retain_capacity);
             self.out.clearRetainingCapacity();
@@ -1754,8 +1754,8 @@ fn runZonScenario(io: std.Io, allocator: Allocator, bench_case: *ZonBenchCase) !
             _ = self.arena.reset(.retain_capacity);
             self.out.clearRetainingCapacity();
             std.zon.stringify.serialize(self.value, .{ .whitespace = false }, &self.out.writer) catch @panic("std.zon roundtrip serialize failed");
-            const source = self.arena.allocator().dupeZ(u8, self.out.written()) catch @panic("std.zon roundtrip input allocation failed");
-            const parsed = std.zon.parse.fromSliceAlloc(StdPayload, self.arena.allocator(), source, null, .{}) catch @panic("std.zon roundtrip parse failed");
+            const source = self.arena.allocator().dupeSentinel(u8, self.out.written(), 0) catch @panic("std.zon roundtrip input allocation failed");
+            const parsed = stdZonFromSlice(StdPayload, self.arena.allocator(), source) catch @panic("std.zon roundtrip parse failed");
             consumeStdPayload(parsed);
         }
     };
@@ -4298,8 +4298,8 @@ fn deepEqual(comptime T: type, expected: T, actual: T) bool {
             else => false,
         },
         .@"struct" => |info| blk: {
-            inline for (info.fields) |field| {
-                if (!deepEqual(field.type, @field(expected, field.name), @field(actual, field.name))) {
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (!deepEqual(field_type, @field(expected, field_name), @field(actual, field_name))) {
                     break :blk false;
                 }
             }
@@ -4362,15 +4362,15 @@ fn reportFirstMismatch(comptime T: type, expected: T, actual: T, comptime path: 
             else => std.debug.print("  {s}: pointer mismatch in unsupported pointer shape\n", .{path}),
         },
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                const expected_field = @field(expected, field.name);
-                const actual_field = @field(actual, field.name);
-                if (!deepEqual(field.type, expected_field, actual_field)) {
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                const expected_field = @field(expected, field_name);
+                const actual_field = @field(actual, field_name);
+                if (!deepEqual(field_type, expected_field, actual_field)) {
                     reportFirstMismatch(
-                        field.type,
+                        field_type,
                         expected_field,
                         actual_field,
-                        std.fmt.comptimePrint("{s}.{s}", .{ path, field.name }),
+                        std.fmt.comptimePrint("{s}.{s}", .{ path, field_name }),
                     );
                     return;
                 }
@@ -4398,6 +4398,16 @@ fn consumePayload(value: Payload) void {
     std.mem.doNotOptimizeAway(value.endpoints.len);
     std.mem.doNotOptimizeAway(value.metrics.len);
     std.mem.doNotOptimizeAway(value.events.len);
+}
+
+fn stdZonFromSlice(comptime T: type, allocator: Allocator, source: [:0]const u8) !T {
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    return std.zon.parse.fromSlice(T, .{
+        .gpa = allocator,
+        .arena = allocator,
+        .source = source,
+        .diagnostics = &diagnostics,
+    });
 }
 
 fn consumeStdPayload(value: StdPayload) void {

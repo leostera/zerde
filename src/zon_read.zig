@@ -41,13 +41,13 @@ pub fn readerDeserializer(allocator: Allocator, reader: *std.Io.Reader, comptime
     const raw_input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
     defer allocator.free(raw_input);
 
-    const input = try allocator.dupeZ(u8, raw_input);
+    const input = try allocator.dupeSentinel(u8, raw_input, 0);
     return ZonDeserializer(@TypeOf(cfg)).init(allocator, input, cfg);
 }
 
 pub fn sliceDeserializer(allocator: Allocator, input: []const u8, comptime cfg: anytype) !ZonDeserializer(@TypeOf(cfg)) {
     if (input.len > effectiveMaxInputBytes(cfg)) return error.InputTooLarge;
-    return ZonDeserializer(@TypeOf(cfg)).init(allocator, try allocator.dupeZ(u8, input), cfg);
+    return ZonDeserializer(@TypeOf(cfg)).init(allocator, try allocator.dupeSentinel(u8, input, 0), cfg);
 }
 
 pub fn deserialize(comptime T: type, allocator: Allocator, reader: *std.Io.Reader) ParseError!T {
@@ -129,7 +129,7 @@ pub fn ZonDeserializer(comptime Config: type) type {
 
             if (self.ast) |ast| {
                 const node = self.currentNodeIndex();
-                const token = ast.nodeMainToken(node.getAstNode(self.zoir.?));
+                const token = ast.nodeMainToken(node.getAstNode(&self.zoir.?));
                 return locationFromAstToken(ast, token, 0);
             }
 
@@ -224,7 +224,7 @@ pub fn ZonDeserializer(comptime Config: type) type {
         pub fn readEnumTag(self: *Self, comptime T: type) !T {
             try self.ensureParsed();
             return switch (self.currentNode()) {
-                .enum_literal => |field_name| std.meta.stringToEnum(T, field_name.get(self.zoir.?)) orelse return self.failCurrent(error.InvalidEnumTag),
+                .enum_literal => |field_name| std.meta.stringToEnum(T, field_name.get(&self.zoir.?)) orelse return self.failCurrent(error.InvalidEnumTag),
                 .string_literal => blk: {
                     const token = try self.readString(self.allocator);
                     defer token.deinit(self.allocator);
@@ -240,7 +240,7 @@ pub fn ZonDeserializer(comptime Config: type) type {
             return switch (self.currentNode()) {
                 .string_literal => try self.parseStringToken(self.currentNodeIndex()),
                 .enum_literal => |field_name| .{
-                    .bytes = field_name.get(self.zoir.?),
+                    .bytes = field_name.get(&self.zoir.?),
                     .allocated = false,
                 },
                 else => return self.failCurrent(error.UnexpectedType),
@@ -327,7 +327,7 @@ pub fn ZonDeserializer(comptime Config: type) type {
             frame.index += 1;
             self.current = frame.vals.at(@intCast(field_index));
             return .{
-                .bytes = frame.names[field_index].get(self.zoir.?),
+                .bytes = frame.names[field_index].get(&self.zoir.?),
                 .allocated = false,
             };
         }
@@ -346,7 +346,7 @@ pub fn ZonDeserializer(comptime Config: type) type {
             const field_index = frame.index;
             frame.index += 1;
             self.current = frame.vals.at(@intCast(field_index));
-            const field_name = frame.names[field_index].get(self.zoir.?);
+            const field_name = frame.names[field_index].get(&self.zoir.?);
 
             return if (typed.matchStructFieldIndex(T, cfg, field_name)) |index|
                 .{ .field_index = index }
@@ -365,12 +365,13 @@ pub fn ZonDeserializer(comptime Config: type) type {
                 return;
             }
 
-            var ast = try std.zig.Ast.parse(self.allocator, self.input, .zon);
-            errdefer ast.deinit(self.allocator);
+            var ast = try std.zig.Ast.parse(self.allocator, self.input, .{ .mode = .zon });
+            const zoir = ZonGen.generate(self.allocator, ast, .{ .parse_str_lits = false }) catch |err| {
+                ast.deinit(self.allocator);
+                return err;
+            };
 
-            var zoir = try ZonGen.generate(self.allocator, ast, .{ .parse_str_lits = false });
-            errdefer zoir.deinit(self.allocator);
-
+            // From here `deinit` owns both; an errdefer would free them a second time.
             self.ast = ast;
             self.zoir = zoir;
 
@@ -382,12 +383,12 @@ pub fn ZonDeserializer(comptime Config: type) type {
 
         fn parseStringToken(self: *Self, node: Zoir.Node.Index) !StringToken {
             const ast = self.ast.?;
-            const ast_node = node.getAstNode(self.zoir.?);
+            const ast_node = node.getAstNode(&self.zoir.?);
             var out: std.Io.Writer.Allocating = .init(self.allocator);
             errdefer out.deinit();
 
-            try out.ensureUnusedCapacity(ZonGen.strLitSizeHint(ast, ast_node));
-            const result = ZonGen.parseStrLit(ast, ast_node, &out.writer) catch return error.OutOfMemory;
+            try out.ensureUnusedCapacity(ZonGen.strLitSizeHint(&ast, ast_node));
+            const result = ZonGen.parseStrLit(&ast, ast_node, &out.writer) catch return error.OutOfMemory;
             switch (result) {
                 .success => {},
                 .failure => |err| {
@@ -409,7 +410,7 @@ pub fn ZonDeserializer(comptime Config: type) type {
         }
 
         fn currentNode(self: *Self) Zoir.Node {
-            return self.currentNodeIndex().get(self.zoir.?);
+            return self.currentNodeIndex().get(&self.zoir.?);
         }
 
         fn currentFrame(self: *Self) *Frame {
@@ -447,7 +448,7 @@ fn firstCompileErrorLocation(ast: Ast, zoir: Zoir) diagnostic_mod.Location {
         return locationFromAstToken(ast, token, @intCast(compile_err.node_or_offset));
     }
 
-    const node: Ast.Node.Index = @enumFromInt(compile_err.node_or_offset);
+    const node: Ast.Node.Index = @fromBackingInt(@intCast(compile_err.node_or_offset));
     return locationFromAstToken(ast, ast.nodeMainToken(node), 0);
 }
 
