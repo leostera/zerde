@@ -61,7 +61,9 @@ fn generateCorpusTests(
     comptime extension: []const u8,
     comptime support_import_name: []const u8,
 ) std.Build.LazyPath {
-    const corpus_dir = b.pathFromRoot(std.fmt.comptimePrint("tests/corpus/{s}", .{format_name}));
+    const corpus_sub_path = std.fmt.comptimePrint("tests/corpus/{s}", .{format_name});
+    const corpus_dir = b.root.joinString(b.allocator, corpus_sub_path) catch @panic("OOM");
+    b.dependOnDirectoryContents(b.path(corpus_sub_path));
     const io = b.graph.io;
 
     var names = std.array_list.Managed([]const u8).init(b.allocator);
@@ -105,7 +107,7 @@ fn generateCorpusTests(
                 format_name,
                 name,
                 name,
-                std.zig.fmtString(b.pathFromRoot(rel_path)),
+                std.zig.fmtString(b.root.joinString(b.allocator, rel_path) catch @panic("OOM")),
             },
         ) catch @panic("failed to write corpus test case");
     }
@@ -482,7 +484,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(bench_exe);
 
     const run_bench = b.addRunArtifact(bench_exe);
-    if (b.args) |args| run_bench.addArgs(args);
+    run_bench.addPassthruArgs();
 
     const bench_build_step = b.step("bench-build", "Compile benchmark harness without running it");
     bench_build_step.dependOn(&bench_exe.step);
