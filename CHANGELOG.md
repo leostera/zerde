@@ -8,6 +8,11 @@
 - CI installs Zig 0.17.0
 - updated the `toml` (`zig-toml`), `zbor`, and `zbench` dependencies to 0.17-compatible commits
 - patched the vendored `bufzilla`, `msgpack-zig`, `zig-bson`, and `zig-yaml` benchmark baselines for 0.17
+- `zig build test` now runs the corpus, invalid-input, fuzz, and property test modules; Zig only collects tests from the test root's own module, so these were not being run before
+- fixed a double free in the ZON reader when a document has compile errors
+- TOML and YAML parse failures now report the failing input offset in `Diagnostic`
+- YAML now writes empty inline arrays as `[ ]`, writes string arrays inline, and reads an empty document as an empty struct
+- corrected corpus fixtures: no trailing newline for JSON, YAML, and ZON, and MessagePack and BSON strings encoded as str rather than bin
 
 ## 0.1.0
 
