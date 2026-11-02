@@ -16,6 +16,7 @@ pub const WriteConfig = struct {
 
 pub const readerDeserializer = read_impl.readerDeserializer;
 pub const sliceDeserializer = read_impl.sliceDeserializer;
+pub const sliceDeserializerWithDiagnostic = read_impl.sliceDeserializerWithDiagnostic;
 pub const deserialize = read_impl.deserialize;
 pub const deserializeWith = read_impl.deserializeWith;
 pub const parseSlice = read_impl.parseSlice;
@@ -290,6 +291,7 @@ pub fn YamlSerializer(comptime Config: type) type {
         }
 
         fn writeInlineSequence(self: *Self, comptime T: type, value: T) !void {
+            if (value.len == 0) return self.writer.writeAll("[ ]");
             try self.writer.writeAll("[ ");
             switch (@typeInfo(T)) {
                 .array => {
@@ -433,7 +435,15 @@ fn isInlineSequenceElementType(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => true,
         .optional => |info| isInlineSequenceElementType(info.child),
-        .array, .pointer => isInlineSequenceType(T),
+        .array, .pointer => isInlineSequenceType(T) or isStringType(T),
+        else => false,
+    };
+}
+
+fn isStringType(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.child == u8,
+        .pointer => |info| info.size == .slice and info.child == u8,
         else => false,
     };
 }

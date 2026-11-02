@@ -5,6 +5,7 @@
 //! flow sequences of scalar values, plain scalars, and quoted scalars.
 
 const std = @import("std");
+const diagnostic_mod = @import("diagnostic.zig");
 const Allocator = std.mem.Allocator;
 const meta = @import("meta.zig");
 const typed = @import("typed.zig");
@@ -128,6 +129,16 @@ const Line = struct {
     content: []const u8,
 };
 
+/// Like `sliceDeserializer`, but records the failing input offset in `diagnostic` when the document does not parse.
+pub fn sliceDeserializerWithDiagnostic(
+    allocator: Allocator,
+    input: []const u8,
+    comptime cfg: anytype,
+    diagnostic: *diagnostic_mod.Diagnostic,
+) !YamlDeserializer(@TypeOf(cfg)) {
+    return YamlDeserializer(@TypeOf(cfg)).initWithDiagnostic(allocator, input, false, cfg, diagnostic);
+}
+
 pub fn readerDeserializer(allocator: Allocator, reader: *std.Io.Reader, comptime cfg: anytype) !YamlDeserializer(@TypeOf(cfg)) {
     const input = try reader.allocRemaining(allocator, .limited(effectiveMaxInputBytes(cfg)));
     return YamlDeserializer(@TypeOf(cfg)).init(allocator, input, true, cfg);
@@ -203,18 +214,38 @@ pub fn YamlDeserializer(comptime Config: type) type {
         current: ?*const Node = null,
         stack: [128]Frame = undefined,
         stack_len: usize = 0,
+        empty_document: bool = false,
+        empty_table: Table = .{},
 
         const Self = @This();
 
         fn init(allocator: Allocator, input: []const u8, owns_input: bool, cfg: Config) !Self {
-            var parser = try Parser.init(allocator, input, effectiveBorrowStrings(cfg));
+            return initWithDiagnostic(allocator, input, owns_input, cfg, null);
+        }
+
+        fn initWithDiagnostic(
+            allocator: Allocator,
+            input: []const u8,
+            owns_input: bool,
+            cfg: Config,
+            diagnostic: ?*diagnostic_mod.Diagnostic,
+        ) !Self {
+            var parser = Parser.init(allocator, input, effectiveBorrowStrings(cfg)) catch |err| {
+                if (diagnostic) |d| d.location.offset = 0;
+                return err;
+            };
             defer parser.deinit(allocator);
 
+            const root = parser.parseDocument(allocator) catch |err| {
+                if (diagnostic) |d| d.location.offset = parser.errorOffset();
+                return err;
+            };
             return .{
                 .input = input,
                 .cfg = cfg,
                 .owns_input = owns_input,
-                .root = try parser.parseDocument(allocator),
+                .root = root,
+                .empty_document = parser.lines.items.len == 0,
             };
         }
 
@@ -316,6 +347,8 @@ pub fn YamlDeserializer(comptime Config: type) type {
         pub fn beginObject(self: *Self) !void {
             const table = switch (self.currentNode().*) {
                 .table => |value| value,
+                // An empty document is the serialized form of a struct without fields.
+                .null => if (self.empty_document and self.current == null) &self.empty_table else return error.UnexpectedType,
                 else => return error.UnexpectedType,
             };
 
@@ -392,6 +425,12 @@ const Parser = struct {
 
     fn deinit(self: *Parser, allocator: Allocator) void {
         self.lines.deinit(allocator);
+    }
+
+    /// Input offset of the line being parsed, or the end of input once all lines are consumed.
+    fn errorOffset(self: *const Parser) usize {
+        if (self.line_index >= self.lines.items.len) return self.input.len;
+        return @intFromPtr(self.lines.items[self.line_index].content.ptr) - @intFromPtr(self.input.ptr);
     }
 
     fn parseDocument(self: *Parser, allocator: Allocator) ParseError!Node {

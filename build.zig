@@ -93,9 +93,12 @@ fn generateCorpusTests(
         \\
     , .{ format_name, support_import_name })) catch @panic("failed to write corpus test prologue");
 
+    // Fixtures are copied next to the generated source so `@embedFile` stays inside the module's package path.
+    const generated = b.addWriteFiles();
     for (names.items) |name| {
         const rel_path = std.fmt.allocPrint(b.allocator, "tests/corpus/{s}/{s}", .{ format_name, name }) catch @panic("OOM");
         defer b.allocator.free(rel_path);
+        _ = generated.addCopyFile(b.path(rel_path), name);
 
         out.writer.print(
             \\test "{s} corpus: {s}" {{
@@ -107,12 +110,11 @@ fn generateCorpusTests(
                 format_name,
                 name,
                 name,
-                std.zig.fmtString(b.root.joinString(b.allocator, rel_path) catch @panic("OOM")),
+                std.zig.fmtString(name),
             },
         ) catch @panic("failed to write corpus test case");
     }
 
-    const generated = b.addWriteFiles();
     return generated.add(std.fmt.comptimePrint("{s}_corpus_generated.zig", .{format_name}), out.written());
 }
 
@@ -170,6 +172,10 @@ pub fn build(b: *std.Build) void {
         .root_module = tests_root_mod,
     });
 
+    // Zig only collects tests from the test root's own module, so every module
+    // that declares tests gets its own test artifact.
+    var test_modules: std.ArrayList(*std.Build.Module) = .empty;
+
     const corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/corpus_support.zig"),
         .target = target,
@@ -196,15 +202,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "bin_corpus_support", .module = bin_corpus_support_mod },
         },
     });
-    const bin_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/bin_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "bin_corpus_generated", .module = bin_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("bin_tests", bin_tests_mod);
+    test_modules.append(b.allocator, bin_corpus_generated_mod) catch @panic("OOM");
 
     const json_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/json_corpus_support.zig"),
@@ -222,15 +220,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "json_corpus_support", .module = json_corpus_support_mod },
         },
     });
-    const json_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/json_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "json_corpus_generated", .module = json_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("json_tests", json_tests_mod);
+    test_modules.append(b.allocator, json_corpus_generated_mod) catch @panic("OOM");
 
     const toml_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/toml_corpus_support.zig"),
@@ -249,15 +239,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "toml_corpus_support", .module = toml_corpus_support_mod },
         },
     });
-    const toml_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/toml_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "toml_corpus_generated", .module = toml_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("toml_tests", toml_tests_mod);
+    test_modules.append(b.allocator, toml_corpus_generated_mod) catch @panic("OOM");
 
     const yaml_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/yaml_corpus_support.zig"),
@@ -276,15 +258,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "yaml_corpus_support", .module = yaml_corpus_support_mod },
         },
     });
-    const yaml_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/yaml_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "yaml_corpus_generated", .module = yaml_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("yaml_tests", yaml_tests_mod);
+    test_modules.append(b.allocator, yaml_corpus_generated_mod) catch @panic("OOM");
 
     const cbor_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/cbor_corpus_support.zig"),
@@ -303,15 +277,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "cbor_corpus_support", .module = cbor_corpus_support_mod },
         },
     });
-    const cbor_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/cbor_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "cbor_corpus_generated", .module = cbor_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("cbor_tests", cbor_tests_mod);
+    test_modules.append(b.allocator, cbor_corpus_generated_mod) catch @panic("OOM");
 
     const msgpack_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/msgpack_corpus_support.zig"),
@@ -330,15 +296,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "msgpack_corpus_support", .module = msgpack_corpus_support_mod },
         },
     });
-    const msgpack_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/msgpack_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "msgpack_corpus_generated", .module = msgpack_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("msgpack_tests", msgpack_tests_mod);
+    test_modules.append(b.allocator, msgpack_corpus_generated_mod) catch @panic("OOM");
 
     const bson_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/bson_corpus_support.zig"),
@@ -357,15 +315,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "bson_corpus_support", .module = bson_corpus_support_mod },
         },
     });
-    const bson_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/bson_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "bson_corpus_generated", .module = bson_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("bson_tests", bson_tests_mod);
+    test_modules.append(b.allocator, bson_corpus_generated_mod) catch @panic("OOM");
 
     const zon_corpus_support_mod = b.createModule(.{
         .root_source_file = b.path("tests/zon_corpus_support.zig"),
@@ -384,15 +334,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zon_corpus_support", .module = zon_corpus_support_mod },
         },
     });
-    const zon_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/zon_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "zon_corpus_generated", .module = zon_corpus_generated_mod },
-        },
-    });
-    tests.root_module.addImport("zon_tests", zon_tests_mod);
+    test_modules.append(b.allocator, zon_corpus_generated_mod) catch @panic("OOM");
 
     const invalid_tests_mod = b.createModule(.{
         .root_source_file = b.path("tests/invalid_tests.zig"),
@@ -402,7 +344,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zerde", .module = tests_root_mod },
         },
     });
-    tests.root_module.addImport("invalid_tests", invalid_tests_mod);
+    test_modules.append(b.allocator, invalid_tests_mod) catch @panic("OOM");
 
     const fuzz_tests_mod = b.createModule(.{
         .root_source_file = b.path("tests/fuzz_tests.zig"),
@@ -412,7 +354,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zerde", .module = tests_root_mod },
         },
     });
-    tests.root_module.addImport("fuzz_tests", fuzz_tests_mod);
+    test_modules.append(b.allocator, fuzz_tests_mod) catch @panic("OOM");
 
     const property_tests_mod = b.createModule(.{
         .root_source_file = b.path("tests/property_tests.zig"),
@@ -422,12 +364,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zerde", .module = tests_root_mod },
         },
     });
-    tests.root_module.addImport("property_tests", property_tests_mod);
+    test_modules.append(b.allocator, property_tests_mod) catch @panic("OOM");
 
     const run_tests = b.addRunArtifact(tests);
 
     const test_step = b.step("test", "Run zerde tests");
     test_step.dependOn(&run_tests.step);
+    for (test_modules.items) |test_mod| {
+        const module_tests = b.addTest(.{ .root_module = test_mod });
+        test_step.dependOn(&b.addRunArtifact(module_tests).step);
+    }
 
     const examples_step = b.step("examples", "Compile native and WASM examples");
     inline for (.{

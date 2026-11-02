@@ -207,7 +207,10 @@ pub fn parseSliceWithDiagnostics(
         @compileError("format " ++ @typeName(Format) ++ " does not implement sliceDeserializer()");
     }
 
-    var deserializer = try Format.sliceDeserializer(allocator, input, format_cfg);
+    var deserializer = if (@hasDecl(Format, "sliceDeserializerWithDiagnostic"))
+        try Format.sliceDeserializerWithDiagnostic(allocator, input, format_cfg, diagnostic)
+    else
+        try Format.sliceDeserializer(allocator, input, format_cfg);
     defer if (@hasDecl(@TypeOf(deserializer), "deinit")) deserializer.deinit(allocator);
 
     const parsed = typed.deserializeWithDiagnostics(T, allocator, &deserializer, serde_cfg, diagnostic) catch |err| {
@@ -647,25 +650,14 @@ test "deserializeOwned does not leak after invalid input fails late" {
 
 test {
     _ = @import("bin.zig");
-    _ = @import("bin_tests");
     _ = @import("bson.zig");
-    _ = @import("bson_tests");
-    _ = @import("cbor_tests");
     _ = @import("meta.zig");
     _ = @import("typed.zig");
     _ = @import("cbor.zig");
-    _ = @import("fuzz_tests");
-    _ = @import("invalid_tests");
     _ = @import("json.zig");
-    _ = @import("json_tests");
     _ = @import("msgpack.zig");
-    _ = @import("msgpack_tests");
-    _ = @import("property_tests");
     _ = @import("toml.zig");
-    _ = @import("toml_tests");
     _ = @import("wasm.zig");
     _ = @import("yaml.zig");
-    _ = @import("yaml_tests");
     _ = @import("zon.zig");
-    _ = @import("zon_tests");
 }

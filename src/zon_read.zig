@@ -366,11 +366,12 @@ pub fn ZonDeserializer(comptime Config: type) type {
             }
 
             var ast = try std.zig.Ast.parse(self.allocator, self.input, .{ .mode = .zon });
-            errdefer ast.deinit(self.allocator);
+            const zoir = ZonGen.generate(self.allocator, ast, .{ .parse_str_lits = false }) catch |err| {
+                ast.deinit(self.allocator);
+                return err;
+            };
 
-            var zoir = try ZonGen.generate(self.allocator, ast, .{ .parse_str_lits = false });
-            errdefer zoir.deinit(self.allocator);
-
+            // From here `deinit` owns both; an errdefer would free them a second time.
             self.ast = ast;
             self.zoir = zoir;
 
