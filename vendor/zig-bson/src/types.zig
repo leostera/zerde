@@ -637,12 +637,12 @@ pub const RawBson = union(enum) {
         const info = @typeInfo(dataType);
         owned.value = switch (info) {
             .@"struct" => |v| blk: {
-                var fields = try owned.arena.allocator().alloc(Document.Element, v.fields.len);
-                inline for (v.fields, 0..) |field, i| {
+                var fields = try owned.arena.allocator().alloc(Document.Element, v.field_names.len);
+                inline for (v.field_names, 0..) |field_name, i| {
                     // pass along this arena's allocator
                     fields[i] = .{
-                        field.name,
-                        (try from(owned.arena.allocator(), @field(data, field.name))).value,
+                        field_name,
+                        (try from(owned.arena.allocator(), @field(data, field_name))).value,
                     };
                 }
                 break :blk RawBson.makeDocument(fields);
@@ -805,38 +805,38 @@ pub const RawBson = union(enum) {
                 switch (self) {
                     .document => |doc| {
                         var parsed: T = undefined;
-                        inline for (v.fields) |field| {
-                            if (doc.get(field.name)) |value| {
-                                if (comptime @typeInfo(field.type) == .optional) {
+                        inline for (v.field_names, v.field_types, v.field_attrs) |field_name, field_type, field_attrs| {
+                            if (doc.get(field_name)) |value| {
+                                if (comptime @typeInfo(field_type) == .optional) {
                                     if (value == .null) {
-                                        @field(parsed, field.name) = null;
+                                        @field(parsed, field_name) = null;
                                     } else {
-                                        const child_type = @typeInfo(field.type).optional.child;
+                                        const child_type = @typeInfo(field_type).optional.child;
                                         const converted = value.into(owned.arena.allocator(), child_type) catch |err| {
                                             std.debug.print("zig-bson into field {s} as {s} failed with {s}\n", .{
-                                                field.name,
+                                                field_name,
                                                 @typeName(child_type),
                                                 @errorName(err),
                                             });
                                             return err;
                                         };
-                                        @field(parsed, field.name) = converted.value;
+                                        @field(parsed, field_name) = converted.value;
                                     }
                                 } else {
-                                    const converted = value.into(owned.arena.allocator(), field.type) catch |err| {
+                                    const converted = value.into(owned.arena.allocator(), field_type) catch |err| {
                                         std.debug.print("zig-bson into field {s} as {s} failed with {s}\n", .{
-                                            field.name,
-                                            @typeName(field.type),
+                                            field_name,
+                                            @typeName(field_type),
                                             @errorName(err),
                                         });
                                         return err;
                                     };
-                                    @field(parsed, field.name) = converted.value;
+                                    @field(parsed, field_name) = converted.value;
                                 }
-                            } else if (field.defaultValue()) |default| {
-                                @field(parsed, field.name) = default;
-                            } else if (@typeInfo(field.type) == .optional) {
-                                @field(parsed, field.name) = null;
+                            } else if (field_attrs.defaultValue(field_type)) |default| {
+                                @field(parsed, field_name) = default;
+                            } else if (@typeInfo(field_type) == .optional) {
+                                @field(parsed, field_name) = null;
                             } else {
                                 return error.UnresolvedValue;
                             }
@@ -855,9 +855,9 @@ pub const RawBson = union(enum) {
             .@"enum" => |v| blk: {
                 switch (self) {
                     .string => |s| {
-                        inline for (v.fields, 0..) |field, i| {
-                            if (std.mem.eql(u8, field.name, s)) {
-                                break :blk @enumFromInt(i);
+                        inline for (v.field_names, 0..) |field_name, i| {
+                            if (std.mem.eql(u8, field_name, s)) {
+                                break :blk @fromBackingInt(@intCast(i));
                             }
                         }
                         return error.UnsupportedEnumVariant;
@@ -1216,11 +1216,11 @@ pub const Type = enum(i8) {
     max_key = 0x7f,
 
     pub fn fromInt(int: i8) @This() {
-        return @enumFromInt(int);
+        return @fromBackingInt(@intCast(int));
     }
 
     pub fn toInt(self: @This()) i8 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     pub fn format(
@@ -1249,15 +1249,15 @@ pub const SubType = enum(u8) {
     user_defined = 0x80,
 
     pub fn fromInt(int: u8) @This() {
-        return @enumFromInt(int);
+        return @fromBackingInt(@intCast(int));
     }
 
     pub fn toInt(self: @This()) u8 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     fn hex(self: @This()) [2]u8 {
-        return std.fmt.bytesToHex([_]u8{@intFromEnum(self)}, .lower);
+        return std.fmt.bytesToHex([_]u8{@backingInt(self)}, .lower);
     }
 
     pub fn format(

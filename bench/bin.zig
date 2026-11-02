@@ -615,7 +615,7 @@ fn decodeBufzillaStruct(
     if (tagOf(current) != .object) return error.UnexpectedType;
 
     var result: T = undefined;
-    var seen: [info.fields.len]bool = [_]bool{false} ** info.fields.len;
+    var seen: [info.field_names.len]bool = @splat(false);
     errdefer freePartialDecodedStruct(T, allocator, &result, &seen);
 
     while (true) {
@@ -625,9 +625,9 @@ fn decodeBufzillaStruct(
         const value = try reader.read();
 
         var matched = false;
-        inline for (info.fields, 0..) |field, i| {
-            if (std.mem.eql(u8, key, field.name)) {
-                @field(result, field.name) = try decodeBufzillaFromValue(field.type, allocator, reader, value);
+        inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+            if (std.mem.eql(u8, key, field_name)) {
+                @field(result, field_name) = try decodeBufzillaFromValue(field_type, allocator, reader, value);
                 seen[i] = true;
                 matched = true;
                 break;
@@ -637,7 +637,7 @@ fn decodeBufzillaStruct(
         if (!matched) try skipBufzillaCurrent(reader, value);
     }
 
-    inline for (info.fields, 0..) |_, i| {
+    inline for (0..info.field_names.len) |i| {
         if (!seen[i]) return error.MissingField;
     }
     return result;
@@ -720,14 +720,15 @@ fn freeDecodedValue(comptime T: type, allocator: Allocator, value: T) void {
             },
             else => {},
         },
-        .@"struct" => |info| inline for (info.fields) |field| freeDecodedValue(field.type, allocator, @field(value, field.name)),
+        .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| freeDecodedValue(field_type, allocator, @field(value, field_name)),
         else => {},
     }
 }
 
-fn freePartialDecodedStruct(comptime T: type, allocator: Allocator, result: *T, seen: *[@typeInfo(T).@"struct".fields.len]bool) void {
-    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
-        if (seen[i]) freeDecodedValue(field.type, allocator, @field(result.*, field.name));
+fn freePartialDecodedStruct(comptime T: type, allocator: Allocator, result: *T, seen: *[@typeInfo(T).@"struct".field_names.len]bool) void {
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+        if (seen[i]) freeDecodedValue(field_type, allocator, @field(result.*, field_name));
     }
 }
 

@@ -67,7 +67,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
         depth: u32 = 0,
 
         // Per-depth iteration counters.
-        iteration_counts: [counter_stack_size]usize = [_]usize{0} ** counter_stack_size,
+        iteration_counts: [counter_stack_size]usize = @splat(0),
 
         /// Initializes the reader.
         pub fn init(bytes: []const u8) Self {
@@ -84,7 +84,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
             switch (@typeInfo(T)) {
                 .int => return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little),
                 .float => {
-                    const IntType = std.meta.Int(.unsigned, @bitSizeOf(T));
+                    const IntType = @Int(.unsigned, @bitSizeOf(T));
                     return @bitCast(std.mem.readInt(IntType, bytes[0..@sizeOf(T)], .little));
                 },
                 else => @compileError("readBytes: unsupported type"),
@@ -486,7 +486,7 @@ pub fn Reader(comptime limits: ReadLimits) type {
 
             self.pos = 0;
             self.depth = 0;
-            self.iteration_counts = [_]usize{0} ** counter_stack_size;
+            self.iteration_counts = @splat(0);
 
             try self.readPathsInternal(queries);
 

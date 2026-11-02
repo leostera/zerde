@@ -9,6 +9,38 @@ pub fn NonOptional(comptime T: type) type {
     return T;
 }
 
+/// A struct or union field, rebuilt from the parallel arrays of `@typeInfo` (Zig 0.17).
+pub const Field = struct {
+    name: [:0]const u8,
+    type: type,
+    default_value_ptr: ?*const anyopaque = null,
+
+    pub inline fn defaultValue(comptime field: Field) ?field.type {
+        const dp: *const field.type = @ptrCast(@alignCast(field.default_value_ptr orelse return null));
+        return dp.*;
+    }
+};
+
+pub fn structFields(comptime T: type) []const Field {
+    const info = @typeInfo(T).@"struct";
+    comptime var fields: [info.field_names.len]Field = undefined;
+    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |name, field_type, attrs, i| {
+        fields[i] = .{ .name = name, .type = field_type, .default_value_ptr = attrs.default_value_ptr };
+    }
+    const result = fields;
+    return &result;
+}
+
+pub fn unionFields(comptime T: type) []const Field {
+    const info = @typeInfo(T).@"union";
+    comptime var fields: [info.field_names.len]Field = undefined;
+    inline for (info.field_names, info.field_types, 0..) |name, field_type, i| {
+        fields[i] = .{ .name = name, .type = field_type };
+    }
+    const result = fields;
+    return &result;
+}
+
 pub fn Optional(comptime T: type, comptime is_optional: bool) type {
     return if (is_optional) ?T else T;
 }
