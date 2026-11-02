@@ -11,7 +11,7 @@
 - `zig build test` now runs the corpus, invalid-input, fuzz, and property test modules; Zig only collects tests from the test root's own module, so these were not being run before
 - fixed a double free in the ZON reader when a document has compile errors
 - TOML and YAML parse failures now report the failing input offset in `Diagnostic`
-- YAML now writes empty arrays as `[ ]` (inline) and reads an empty document as an empty struct
+- YAML now writes empty arrays as `[]` (inline) and reads an empty document as an empty struct
 - corrected corpus fixtures: no trailing newline for JSON, YAML, and ZON, MessagePack and BSON strings encoded as str rather than bin, and YAML string arrays as block sequences
 
 ## 0.1.0

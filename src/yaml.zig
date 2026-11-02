@@ -292,7 +292,7 @@ pub fn YamlSerializer(comptime Config: type) type {
         }
 
         fn writeInlineSequence(self: *Self, comptime T: type, value: T) !void {
-            if (value.len == 0) return self.writer.writeAll("[ ]");
+            if (value.len == 0) return self.writer.writeAll("[]");
             try self.writer.writeAll("[ ");
             switch (@typeInfo(T)) {
                 .array => {
